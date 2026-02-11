@@ -60,3 +60,8 @@ const start = async () => {
 };
 
 start();
+
+
+fastify.get("/", (req, res)=> {
+    res.send("Ok")
+})
