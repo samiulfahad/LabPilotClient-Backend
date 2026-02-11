@@ -8,7 +8,7 @@ import referrerRoutes from "./routes/referrers.js";
 
 dotenv.config();
 
-const fastify = Fastify({ logger: false });
+const fastify = Fastify({ logger: true });
 
 // CORS
 await fastify.register(cors, { origin: true, methods: ["GET", "POST", "PUT", "DELETE", "PATCH"] });
@@ -16,6 +16,7 @@ await fastify.register(cors, { origin: true, methods: ["GET", "POST", "PUT", "DE
 // MongoDB
 await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
+  database: 'labpilot'
 });
 
 // Swagger / OpenAPI
@@ -59,9 +60,9 @@ const start = async () => {
   }
 };
 
-start();
-
-
 fastify.get("/", (req, res)=> {
     res.send("Ok")
 })
+start();
+
+
