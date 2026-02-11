@@ -1,0 +1,52 @@
+### Referrer Management API - REST Client
+### Base URL
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+### 1. GET All Referrers
+GET {{baseUrl}}/referrers
+Content-Type: {{contentType}}
+
+### 2. CREATE New Referrer
+POST {{baseUrl}}/referrers
+Content-Type: {{contentType}}
+
+{
+  "name": "Dr. Ahmed Khan 2",
+  "contactNumber": "+8801712345678",
+  "degree": "MBBS, FCPS (Medicine)",
+  "details": "Senior Consultant at United Hospital",
+  "isDoctor": true,
+  "commissionType": "percentage",
+  "commissionValue": 15,
+  "isActive": true
+}
+
+### 3. GET Single Referrer
+GET {{baseUrl}}/referrers/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
+
+### 4. UPDATE Referrer
+PUT {{baseUrl}}/referrers/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
+
+{
+  "name": "Dr. Ahmed Khan",
+  "contactNumber": "+8801712345678",
+  "degree": "MBBS, FCPS (Medicine), MD",
+  "details": "Senior Consultant at United Hospital - Updated",
+  "isDoctor": true,
+  "commissionType": "percentage",
+  "commissionValue": 18,
+  "isActive": true
+}
+
+### 5. DEACTIVATE Referrer
+PATCH {{baseUrl}}/referrers/698c432ab24c050d9011686f/deactivate
+
+### 6. ACTIVATE Referrer
+PATCH {{baseUrl}}/referrers/698c432ab24c050d9011686f/deactivate
+
+### 7. DELETE Referrer (Hard Delete)
+DELETE {{baseUrl}}/referrers/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
