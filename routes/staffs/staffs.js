@@ -162,39 +162,6 @@ async function routes(fastify, options) {
     return { message: "Staff activated successfully", _id: id };
   });
 
-  // PATCH - Update Specific Permission
-  fastify.patch("/staff/:id/permissions", async (req, reply) => {
-    const { id } = req.params;
-    const { permission, value } = req.body;
-
-    const validPermissions = ["createInvoice", "editInvoice", "deleteInvoice", "cashmemo", "uploadReport"];
-
-    if (!validPermissions.includes(permission)) {
-      return reply.code(400).send({ error: "Invalid permission type" });
-    }
-
-    if (typeof value !== "boolean") {
-      return reply.code(400).send({ error: "Permission value must be boolean" });
-    }
-
-    const result = await collection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          [`permissions.${permission}`]: value,
-          updatedAt: new Date(),
-        },
-      },
-    );
-
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
-    }
-
-    const updated = await collection.findOne({ _id: new ObjectId(id) });
-    return toClientFormat(updated);
-  });
 
   // DELETE - Hard Delete
   fastify.delete("/staff/:id", async (req, reply) => {
@@ -208,44 +175,6 @@ async function routes(fastify, options) {
     }
 
     return { message: "Staff deleted successfully" };
-  });
-
-  // GET - Get staff by username (useful for login/authentication)
-  fastify.get("/staff/username/:username", async (req, reply) => {
-    const { username } = req.params;
-    const staffMember = await collection.findOne({ username: username.toLowerCase() });
-
-    if (!staffMember) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
-    }
-
-    return toClientFormat(staffMember);
-  });
-
-  // GET - Get active staff only
-  fastify.get("/staff/active/list", async (req, reply) => {
-    const activeStaff = await collection.find({ isActive: true }).sort({ name: 1 }).toArray();
-
-    return activeStaff.map(toClientFormat);
-  });
-
-  // GET - Get staff with specific permission
-  fastify.get("/staff/permission/:permission", async (req, reply) => {
-    const { permission } = req.params;
-
-    const validPermissions = ["createInvoice", "editInvoice", "deleteInvoice", "cashmemo", "uploadReport"];
-
-    if (!validPermissions.includes(permission)) {
-      return reply.code(400).send({ error: "Invalid permission type" });
-    }
-
-    const staff = await collection
-      .find({ [`permissions.${permission}`]: true, isActive: true })
-      .sort({ name: 1 })
-      .toArray();
-
-    return staff.map(toClientFormat);
   });
 }
 
