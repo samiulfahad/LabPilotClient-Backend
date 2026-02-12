@@ -1,0 +1,187 @@
+### Staff Management API - REST Client
+### Base URL
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+### 1. GET All Staff
+GET {{baseUrl}}/staffs
+Content-Type: {{contentType}}
+
+### 2. CREATE New Staff
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "John Doe",
+  "username": "johndoe",
+  "mobileNumber": "01712345678",
+  "permissions": {
+    "createInvoice": true,
+    "editInvoice": true,
+    "deleteInvoice": false,
+    "cashmemo": true,
+    "uploadReport": false
+  },
+  "isActive": true
+}
+
+### 3. CREATE Staff with Full Access
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Admin User",
+  "username": "adminuser",
+  "mobileNumber": "01812345678",
+  "permissions": {
+    "createInvoice": true,
+    "editInvoice": true,
+    "deleteInvoice": true,
+    "cashmemo": true,
+    "uploadReport": true
+  },
+  "isActive": true
+}
+
+### 4. GET Single Staff by ID
+GET {{baseUrl}}/staff/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
+
+### 5. GET Staff by Username
+GET {{baseUrl}}/staff/username/johndoe
+Content-Type: {{contentType}}
+
+### 6. GET Active Staff Only
+GET {{baseUrl}}/staff/active/list
+Content-Type: {{contentType}}
+
+### 7. GET Staff with Specific Permission (Create Invoice)
+GET {{baseUrl}}/staff/permission/createInvoice
+Content-Type: {{contentType}}
+
+### 8. GET Staff with Specific Permission (Delete Invoice)
+GET {{baseUrl}}/staff/permission/deleteInvoice
+Content-Type: {{contentType}}
+
+### 9. GET Staff with Specific Permission (Cashmemo)
+GET {{baseUrl}}/staff/permission/cashmemo
+Content-Type: {{contentType}}
+
+### 10. UPDATE Staff
+PUT {{baseUrl}}/staff/edit/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
+
+{
+  "name": "John Doe Updated",
+  "username": "johndoe",
+  "mobileNumber": "01712345679",
+  "permissions": {
+    "createInvoice": true,
+    "editInvoice": true,
+    "deleteInvoice": true,
+    "cashmemo": true,
+    "uploadReport": true
+  },
+  "isActive": true
+}
+
+### 11. UPDATE Single Permission
+PATCH {{baseUrl}}/staff/698c432ab24c050d9011686f/permissions
+Content-Type: {{contentType}}
+
+{
+  "permission": "deleteInvoice",
+  "value": true
+}
+
+### 12. UPDATE Single Permission (Disable)
+PATCH {{baseUrl}}/staff/698c432ab24c050d9011686f/permissions
+Content-Type: {{contentType}}
+
+{
+  "permission": "uploadReport",
+  "value": false
+}
+
+### 13. DEACTIVATE Staff
+PATCH {{baseUrl}}/staff/698c432ab24c050d9011686f/deactivate
+
+### 14. ACTIVATE Staff
+PATCH {{baseUrl}}/staff/698c432ab24c050d9011686f/activate
+
+### 15. DELETE Staff (Hard Delete)
+DELETE {{baseUrl}}/staff/698c432ab24c050d9011686f
+Content-Type: {{contentType}}
+
+### ===== TEST SCENARIOS =====
+
+### Test 1: Create Staff with Missing Required Fields (Should Fail)
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Test User"
+}
+
+### Test 2: Create Staff with Duplicate Username (Should Fail)
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Duplicate User",
+  "username": "johndoe",
+  "mobileNumber": "01912345678",
+  "permissions": {
+    "createInvoice": true,
+    "editInvoice": false,
+    "deleteInvoice": false,
+    "cashmemo": false,
+    "uploadReport": false
+  },
+  "isActive": true
+}
+
+### Test 3: Update with Invalid Permission Type (Should Fail)
+PATCH {{baseUrl}}/staff/698c432ab24c050d9011686f/permissions
+Content-Type: {{contentType}}
+
+{
+  "permission": "invalidPermission",
+  "value": true
+}
+
+### Test 4: Create Staff with No Permissions
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Limited User",
+  "username": "limiteduser",
+  "mobileNumber": "01612345678",
+  "permissions": {
+    "createInvoice": false,
+    "editInvoice": false,
+    "deleteInvoice": false,
+    "cashmemo": false,
+    "uploadReport": false
+  },
+  "isActive": true
+}
+
+### Test 5: Create Inactive Staff
+POST {{baseUrl}}/staff/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Inactive User",
+  "username": "inactiveuser",
+  "mobileNumber": "01512345678",
+  "permissions": {
+    "createInvoice": true,
+    "editInvoice": true,
+    "deleteInvoice": false,
+    "cashmemo": false,
+    "uploadReport": false
+  },
+  "isActive": false
+}

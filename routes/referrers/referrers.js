@@ -19,7 +19,7 @@ async function routes(fastify, options) {
   });
 
   // GET single referrer
-  fastify.get("/referrers/:id", async (req, reply) => {
+  fastify.get("/referrer/:id", async (req, reply) => {
     const { id } = req.params;
     const referrer = await collection.findOne({ _id: new ObjectId(id) });
 
@@ -32,7 +32,7 @@ async function routes(fastify, options) {
   });
 
   // POST - Create Referrer
-  fastify.post("/referrers/add", async (req, reply) => {
+  fastify.post("/referrer/add", async (req, reply) => {
     const { type, _id, ...data } = req.body; // remove frontend-only fields
 
     // Validation
@@ -60,7 +60,7 @@ async function routes(fastify, options) {
   });
 
   // PUT - Update Referrer
-  fastify.put("/referrers/edit/:id", async (req, reply) => {
+  fastify.put("/referrer/edit/:id", async (req, reply) => {
     const { id } = req.params;
     const { type, _id, ...data } = req.body;
 
@@ -81,7 +81,7 @@ async function routes(fastify, options) {
   });
 
   // PATCH - Deactivate Referrer
-  fastify.patch("/referrers/:id/deactivate", async (req, reply) => {
+  fastify.patch("/referrer/:id/deactivate", async (req, reply) => {
     const { id } = req.params;
 
     const result = await collection.updateOne(
@@ -99,7 +99,7 @@ async function routes(fastify, options) {
 
 
   // PATCH - Activate Referrer
-  fastify.patch("/referrers/:id/activate", async (req, reply) => {
+  fastify.patch("/referrer/:id/activate", async (req, reply) => {
     const { id } = req.params;
 
     const result = await collection.updateOne(
@@ -116,7 +116,7 @@ async function routes(fastify, options) {
   });
 
   // DELETE - Hard Delete
-  fastify.delete("/referrers/:id", async (req, reply) => {
+  fastify.delete("/referrer/:id", async (req, reply) => {
     const { id } = req.params;
 
     const result = await collection.deleteOne({ _id: new ObjectId(id) });
