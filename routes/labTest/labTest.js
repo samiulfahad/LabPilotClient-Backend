@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 
-const collectionName = "tests";
+const collectionName = "myTestList";
 
 async function routes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
