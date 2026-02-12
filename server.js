@@ -6,6 +6,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import dotenv from "dotenv";
 import referrerRoutes from "./routes/referrers/referrers.js";
 import staffRoutes from './routes/staffs/staffs.js';
+import labTestRoutes from './routes/labTest/labTest.js'
 
 dotenv.config();
 
@@ -50,6 +51,7 @@ await fastify.register(swaggerUi, {
 // Routes
 fastify.register(referrerRoutes, { prefix: "/api/v1" });
 fastify.register(staffRoutes, { prefix: '/api/v1' });
+fastify.register(labTestRoutes, { prefix: '/api/v1' });
 
 const start = async () => {
   try {

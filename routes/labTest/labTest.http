@@ -1,0 +1,63 @@
+### Lab Test Management API - REST Client
+### Base URL
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+### 1. GET All Tests
+GET {{baseUrl}}/tests
+Content-Type: {{contentType}}
+
+### 2. CREATE New Test (Online - with Schema)
+POST {{baseUrl}}/test/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Complete Blood Count pro",
+  "testId": "693d9f18a2469caf76ab7826",
+  "categoryId": "693d9f18a2469caf76ab7825",
+  "schemaId": "69498dad079c05581bbcbd4b",
+  "price": 500
+}
+
+### 3. CREATE Test without Schema (Offline)
+POST {{baseUrl}}/test/add
+Content-Type: {{contentType}}
+
+{
+  "name": "Blood Sugar Random",
+  "testId": "693d9f18a2469caf76ab7827",
+  "categoryId": "693d9f18a2469caf76ab7825",
+  "schemaId": null,
+  "price": 150
+}
+
+### 4. GET Single Test by testId
+GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
+Content-Type: {{contentType}}
+
+### 5. UPDATE Test Price
+PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-price
+Content-Type: {{contentType}}
+
+{
+  "price": 600
+}
+
+### 6. UPDATE Test Schema
+PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-schema
+Content-Type: {{contentType}}
+
+{
+  "schemaId": "69498dad079c05581bbcbd4b"
+}
+
+### 7. UPDATE Test Schema to NULL (Remove Schema - Makes Test Offline)
+PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-schema
+Content-Type: {{contentType}}
+
+{
+  "schemaId": null
+}
+
+### 8. DELETE Test (Hard Delete)
+DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
