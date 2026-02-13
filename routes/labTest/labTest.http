@@ -61,3 +61,6 @@ Content-Type: {{contentType}}
 
 ### 8. DELETE Test (Hard Delete)
 DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
+
+### 9. Get Test Schemas (Active Only) by Test ID
+GET {{baseUrl}}/test/schema/693d9f31a2469caf76ab7826

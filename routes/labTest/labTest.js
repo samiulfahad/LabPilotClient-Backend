@@ -13,151 +13,189 @@ async function routes(fastify, options) {
 
   // GET all tests
   fastify.get("/tests", async (req, reply) => {
-    const tests = await collection.find({}).sort({ createdAt: -1 }).toArray();
-    return tests.map(toClientFormat);
+    try {
+      const tests = await collection.find({}).sort({ createdAt: -1 }).toArray();
+      return tests.map(toClientFormat);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch tests" });
+    }
   });
 
   // GET single test
   fastify.get("/test/:testId", async (req, reply) => {
-    const { testId } = req.params;
+    try {
+      const { testId } = req.params;
 
-    if (!ObjectId.isValid(testId)) {
-      reply.code(400).send({ error: "Invalid test ID format" });
-      return;
+      if (!ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      const test = await collection.findOne({ testId: testId });
+
+      if (!test) {
+        return reply.code(404).send({ error: "Test not found" });
+      }
+
+      return toClientFormat(test);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch test" });
     }
-
-    const test = await collection.findOne({ testId: testId });
-
-    if (!test) {
-      reply.code(404).send({ error: "Test not found" });
-      return;
-    }
-
-    return toClientFormat(test);
   });
 
   // POST - Create Test
   fastify.post("/test/add", async (req, reply) => {
-    const { name, testId, categoryId, schemaId, price } = req.body;
+    try {
+      const { name, testId, categoryId, schemaId, price } = req.body;
 
-    // Validation
-    if (!name?.trim()) {
-      return reply.code(400).send({ error: "Test name is required" });
+      // Validation
+      if (!name?.trim()) {
+        return reply.code(400).send({ error: "Test name is required" });
+      }
+
+      // Check if test name already exists
+      const existingTest = await collection.findOne({ name: name.trim() });
+      if (existingTest) {
+        return reply.code(400).send({ error: "Test name already exists" });
+      }
+
+      // Validate categoryId is a valid MongoDB ObjectId if provided
+      if (categoryId && !ObjectId.isValid(categoryId)) {
+        return reply.code(400).send({ error: "Invalid category ID format" });
+      }
+
+      // Validate testId is a valid MongoDB ObjectId if provided
+      if (testId && !ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      const newTest = {
+        name: name.trim(),
+        testId: testId || null,
+        categoryId: categoryId || null,
+        schemaId: schemaId || null,
+        price: parseFloat(price) || 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      const result = await collection.insertOne(newTest);
+
+      return reply.code(201).send({
+        _id: result.insertedId.toString(),
+        ...newTest,
+      });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to create test" });
     }
-
-    // Check if test name already exists
-    const existingTest = await collection.findOne({ name: name.trim() });
-    if (existingTest) {
-      return reply.code(400).send({ error: "Test name already exists" });
-    }
-
-    // Validate categoryId is a valid MongoDB ObjectId if provided
-    if (categoryId && !ObjectId.isValid(categoryId)) {
-      return reply.code(400).send({ error: "Invalid category ID format" });
-    }
-
-    // Validate testId is a valid MongoDB ObjectId if provided
-    if (testId && !ObjectId.isValid(testId)) {
-      return reply.code(400).send({ error: "Invalid test ID format" });
-    }
-
-    const newTest = {
-      name: name.trim(),
-      testId: testId || null,
-      categoryId: categoryId || null,
-      schemaId: schemaId || null,
-      price: parseFloat(price) || 0,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const result = await collection.insertOne(newTest);
-
-    reply.code(201).send({
-      _id: result.insertedId.toString(),
-      ...newTest,
-    });
   });
 
   // PATCH - Update Test Price
   fastify.patch("/test/:testId/update-price", async (req, reply) => {
-    const { testId } = req.params;
-    const { price } = req.body;
+    try {
+      const { testId } = req.params;
+      const { price } = req.body;
 
-    if (!ObjectId.isValid(testId)) {
-      reply.code(400).send({ error: "Invalid test ID format" });
-      return;
+      if (!ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      // Validation
+      if (price === undefined || price === null) {
+        return reply.code(400).send({ error: "Price is required" });
+      }
+
+      const parsedPrice = parseFloat(price);
+      if (isNaN(parsedPrice) || parsedPrice < 0) {
+        return reply.code(400).send({ error: "Invalid price value" });
+      }
+
+      const updateData = {
+        price: parsedPrice,
+        updatedAt: new Date(),
+      };
+
+      const result = await collection.updateOne({ testId: testId }, { $set: updateData });
+
+      if (result.matchedCount === 0) {
+        return reply.code(404).send({ error: "Test not found" });
+      }
+
+      const updated = await collection.findOne({ testId: testId });
+      return toClientFormat(updated);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to update test price" });
     }
-
-    // Validation
-    if (price === undefined || price === null) {
-      return reply.code(400).send({ error: "Price is required" });
-    }
-
-    const parsedPrice = parseFloat(price);
-    if (isNaN(parsedPrice) || parsedPrice < 0) {
-      return reply.code(400).send({ error: "Invalid price value" });
-    }
-
-    const updateData = {
-      price: parsedPrice,
-      updatedAt: new Date(),
-    };
-
-    const result = await collection.updateOne({ testId: testId }, { $set: updateData });
-
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Test not found" });
-      return;
-    }
-
-    const updated = await collection.findOne({ testId: testId });
-    return toClientFormat(updated);
   });
 
   // PATCH - Update Test Schema
   fastify.patch("/test/:testId/update-schema", async (req, reply) => {
-    const { testId } = req.params;
-    const { schemaId } = req.body;
+    try {
+      const { testId } = req.params;
+      const { schemaId } = req.body;
 
-    if (!ObjectId.isValid(testId)) {
-      reply.code(400).send({ error: "Invalid test ID format" });
-      return;
+      if (!ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      const updateData = {
+        schemaId: schemaId || null,
+        updatedAt: new Date(),
+      };
+
+      const result = await collection.updateOne({ testId: testId }, { $set: updateData });
+
+      if (result.matchedCount === 0) {
+        return reply.code(404).send({ error: "Test not found" });
+      }
+
+      const updated = await collection.findOne({ testId: testId });
+      return toClientFormat(updated);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to update test schema" });
     }
-
-    const updateData = {
-      schemaId: schemaId || null,
-      updatedAt: new Date(),
-    };
-
-    const result = await collection.updateOne({ testId: testId }, { $set: updateData });
-
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Test not found" });
-      return;
-    }
-
-    const updated = await collection.findOne({ testId: testId });
-    return toClientFormat(updated);
   });
 
   // DELETE - Hard Delete
   fastify.delete("/test/:testId", async (req, reply) => {
-    const { testId } = req.params;
+    try {
+      const { testId } = req.params;
 
-    if (!ObjectId.isValid(testId)) {
-      reply.code(400).send({ error: "Invalid test ID format" });
-      return;
+      if (!ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      const result = await collection.deleteOne({ testId: testId });
+
+      if (result.deletedCount === 0) {
+        return reply.code(404).send({ error: "Test not found" });
+      }
+
+      return { message: "Test deleted successfully" };
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to delete test" });
     }
+  });
 
-    const result = await collection.deleteOne({ testId: testId });
+  // GET Active Test Schema only by Test ID
+  fastify.get("/test/schema/:testId", async (req, reply) => {
+    try {
+      const { testId } = req.params;
 
-    if (result.deletedCount === 0) {
-      reply.code(404).send({ error: "Test not found" });
-      return;
+      if (!ObjectId.isValid(testId)) {
+        return reply.code(400).send({ error: "Invalid test ID format" });
+      }
+
+      const list = await fastify.mongo.db.collection("testSchema").find({ testId, isActive: true }).toArray();
+      return reply.code(200).send(list);
+    } catch (error) {
+      return reply.code(500).send({ error: "Failed to fetch test formats" });
     }
-
-    return { message: "Test deleted successfully" };
   });
 }
 
