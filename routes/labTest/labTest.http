@@ -4,11 +4,11 @@
 @contentType = application/json
 
 ### 1. GET All Tests
-GET {{baseUrl}}/tests
+GET {{baseUrl}}/test/all
 Content-Type: {{contentType}}
 
 ### 2. CREATE New Test (Online - with Schema)
-POST {{baseUrl}}/test/add
+POST {{baseUrl}}/test
 Content-Type: {{contentType}}
 
 {
@@ -19,48 +19,27 @@ Content-Type: {{contentType}}
   "price": 500
 }
 
-### 3. CREATE Test without Schema (Offline)
-POST {{baseUrl}}/test/add
-Content-Type: {{contentType}}
-
-{
-  "name": "Blood Sugar Random",
-  "testId": "693d9f18a2469caf76ab7827",
-  "categoryId": "693d9f18a2469caf76ab7825",
-  "schemaId": null,
-  "price": 150
-}
-
-### 4. GET Single Test by testId
+### 3. GET Single Test by testId
 GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
 Content-Type: {{contentType}}
 
-### 5. UPDATE Test Price
-PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-price
+### 4. UPDATE Test (Price and/or Schema)
+PATCH {{baseUrl}}/test/6959379448008ead67c37841
 Content-Type: {{contentType}}
 
 {
-  "price": 600
-}
-
-### 6. UPDATE Test Schema
-PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-schema
-Content-Type: {{contentType}}
-
-{
+  "price": 600,
   "schemaId": "69498dad079c05581bbcbd4b"
 }
 
-### 7. UPDATE Test Schema to NULL (Remove Schema - Makes Test Offline)
-PATCH {{baseUrl}}/test/693d9f18a2469caf76ab7826/update-schema
-Content-Type: {{contentType}}
-
-{
-  "schemaId": null
-}
-
-### 8. DELETE Test (Hard Delete)
+### 5. DELETE Test (Hard Delete)
 DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
 
-### 9. Get Test Schemas (Active Only) by Test ID
-GET {{baseUrl}}/test/schema/693d9f31a2469caf76ab7826
+### 6. GET Test Categories
+GET {{baseUrl}}/test/categories
+
+### 7. GET Full Test Catalog
+GET {{baseUrl}}/test/catalog
+
+### 8. GET Active Test Schema by Test ID
+GET {{baseUrl}}/test/schema/693d9f18a2469caf76ab7826

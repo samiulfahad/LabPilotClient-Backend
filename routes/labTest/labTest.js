@@ -12,7 +12,7 @@ async function routes(fastify, options) {
   };
 
   // GET all tests
-  fastify.get("/tests", async (req, reply) => {
+  fastify.get("/test/all", async (req, reply) => {
     try {
       const tests = await collection.find({}).sort({ createdAt: -1 }).toArray();
       return tests.map(toClientFormat);
@@ -45,7 +45,7 @@ async function routes(fastify, options) {
   });
 
   // POST - Create Test
-  fastify.post("/test/add", async (req, reply) => {
+  fastify.post("/test", async (req, reply) => {
     try {
       const { name, testId, categoryId, schemaId, price } = req.body;
 
@@ -92,30 +92,38 @@ async function routes(fastify, options) {
     }
   });
 
-  // PATCH - Update Test Price
-  fastify.patch("/test/:testId/update-price", async (req, reply) => {
+  // PATCH - Update Test
+  fastify.patch("/test/:testId", async (req, reply) => {
     try {
       const { testId } = req.params;
-      const { price } = req.body;
+      const { price, schemaId } = req.body;
 
       if (!ObjectId.isValid(testId)) {
         return reply.code(400).send({ error: "Invalid test ID format" });
       }
 
-      // Validation
-      if (price === undefined || price === null) {
-        return reply.code(400).send({ error: "Price is required" });
-      }
-
-      const parsedPrice = parseFloat(price);
-      if (isNaN(parsedPrice) || parsedPrice < 0) {
-        return reply.code(400).send({ error: "Invalid price value" });
+      // Check if at least one field is provided
+      if (price === undefined && schemaId === undefined) {
+        return reply.code(400).send({ error: "At least one field (price or schemaId) is required" });
       }
 
       const updateData = {
-        price: parsedPrice,
         updatedAt: new Date(),
       };
+
+      // Validate and add price if provided
+      if (price !== undefined && price !== null) {
+        const parsedPrice = parseFloat(price);
+        if (isNaN(parsedPrice) || parsedPrice < 0) {
+          return reply.code(400).send({ error: "Invalid price value" });
+        }
+        updateData.price = parsedPrice;
+      }
+
+      // Add schemaId if provided (can be null or empty)
+      if (schemaId !== undefined) {
+        updateData.schemaId = schemaId || null;
+      }
 
       const result = await collection.updateOne({ testId: testId }, { $set: updateData });
 
@@ -127,36 +135,7 @@ async function routes(fastify, options) {
       return toClientFormat(updated);
     } catch (error) {
       req.log.error(error);
-      return reply.code(500).send({ error: "Failed to update test price" });
-    }
-  });
-
-  // PATCH - Update Test Schema
-  fastify.patch("/test/:testId/update-schema", async (req, reply) => {
-    try {
-      const { testId } = req.params;
-      const { schemaId } = req.body;
-
-      if (!ObjectId.isValid(testId)) {
-        return reply.code(400).send({ error: "Invalid test ID format" });
-      }
-
-      const updateData = {
-        schemaId: schemaId || null,
-        updatedAt: new Date(),
-      };
-
-      const result = await collection.updateOne({ testId: testId }, { $set: updateData });
-
-      if (result.matchedCount === 0) {
-        return reply.code(404).send({ error: "Test not found" });
-      }
-
-      const updated = await collection.findOne({ testId: testId });
-      return toClientFormat(updated);
-    } catch (error) {
-      req.log.error(error);
-      return reply.code(500).send({ error: "Failed to update test schema" });
+      return reply.code(500).send({ error: "Failed to update test" });
     }
   });
 
@@ -179,6 +158,26 @@ async function routes(fastify, options) {
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to delete test" });
+    }
+  });
+
+  // GET All Test Categories
+  fastify.get("/test/categories", async (req, reply) => {
+    try {
+      const list = await fastify.mongo.db.collection("testCategory").find({}).toArray();
+      return reply.code(200).send(list);
+    } catch (error) {
+      return reply.code(500).send({ error: "Failed to fetch test categories" });
+    }
+  });
+
+  // GET All Test Categories
+  fastify.get("/test/catalog", async (req, reply) => {
+    try {
+      const list = await fastify.mongo.db.collection("testCatalog").find({}).toArray();
+      return reply.code(200).send(list);
+    } catch (error) {
+      return reply.code(500).send({ error: "Failed to fetch test categories" });
     }
   });
 
