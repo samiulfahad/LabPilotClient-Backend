@@ -42,14 +42,35 @@ async function routes(fastify, options) {
     if (!data.username?.trim()) {
       return reply.code(400).send({ error: "Username is required" });
     }
+    if (!data.email?.trim()) {
+      return reply.code(400).send({ error: "Email is required" });
+    }
     if (!data.mobileNumber?.trim()) {
       return reply.code(400).send({ error: "Mobile number is required" });
     }
 
+    // Email validation (basic)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email.trim())) {
+      return reply.code(400).send({ error: "Invalid email format" });
+    }
+
     // Check if username already exists
-    const existingUser = await collection.findOne({ username: data.username.toLowerCase() });
-    if (existingUser) {
+    const existingUsername = await collection.findOne({ username: data.username.toLowerCase().trim() });
+    if (existingUsername) {
       return reply.code(400).send({ error: "Username already exists" });
+    }
+
+    // Check if email already exists
+    const existingEmail = await collection.findOne({ email: data.email.toLowerCase().trim() });
+    if (existingEmail) {
+      return reply.code(400).send({ error: "Email already exists" });
+    }
+
+    // Check if mobile number already exists
+    const existingMobile = await collection.findOne({ mobileNumber: data.mobileNumber.trim() });
+    if (existingMobile) {
+      return reply.code(400).send({ error: "Mobile number already exists" });
     }
 
     // Ensure permissions object exists with all fields
@@ -64,6 +85,7 @@ async function routes(fastify, options) {
     const newStaff = {
       name: data.name.trim(),
       username: data.username.toLowerCase().trim(),
+      email: data.email.toLowerCase().trim(),
       mobileNumber: data.mobileNumber.trim(),
       permissions,
       isActive: data.isActive ?? true,
@@ -80,15 +102,44 @@ async function routes(fastify, options) {
     const { id } = req.params;
     const { type, _id, ...data } = req.body;
 
-    // Validation
+    // Email validation if email is being updated
+    if (data.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(data.email.trim())) {
+        return reply.code(400).send({ error: "Invalid email format" });
+      }
+    }
+
+    // Check if username is taken by another staff member
     if (data.username) {
-      // Check if username is taken by another staff member
-      const existingUser = await collection.findOne({
-        username: data.username.toLowerCase(),
+      const existingUsername = await collection.findOne({
+        username: data.username.toLowerCase().trim(),
         _id: { $ne: new ObjectId(id) },
       });
-      if (existingUser) {
+      if (existingUsername) {
         return reply.code(400).send({ error: "Username already exists" });
+      }
+    }
+
+    // Check if email is taken by another staff member
+    if (data.email) {
+      const existingEmail = await collection.findOne({
+        email: data.email.toLowerCase().trim(),
+        _id: { $ne: new ObjectId(id) },
+      });
+      if (existingEmail) {
+        return reply.code(400).send({ error: "Email already exists" });
+      }
+    }
+
+    // Check if mobile number is taken by another staff member
+    if (data.mobileNumber) {
+      const existingMobile = await collection.findOne({
+        mobileNumber: data.mobileNumber.trim(),
+        _id: { $ne: new ObjectId(id) },
+      });
+      if (existingMobile) {
+        return reply.code(400).send({ error: "Mobile number already exists" });
       }
     }
 
@@ -104,6 +155,7 @@ async function routes(fastify, options) {
     const updateData = {
       name: data.name?.trim(),
       username: data.username?.toLowerCase().trim(),
+      email: data.email?.toLowerCase().trim(),
       mobileNumber: data.mobileNumber?.trim(),
       permissions,
       isActive: data.isActive,
@@ -161,7 +213,6 @@ async function routes(fastify, options) {
 
     return { message: "Staff activated successfully", _id: id };
   });
-
 
   // DELETE - Hard Delete
   fastify.delete("/staff/:id", async (req, reply) => {

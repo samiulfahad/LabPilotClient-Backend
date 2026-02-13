@@ -15,6 +15,7 @@ Content-Type: {{contentType}}
   "name": "John Doe",
   "username": "johndoe",
   "mobileNumber": "01712345678",
+  "email": "abc@example.com",
   "permissions": {
     "createInvoice": true,
     "editInvoice": true,
@@ -37,6 +38,7 @@ Content-Type: {{contentType}}
 {
   "name": "John Doe Updated",
   "username": "johndoe",
+  "email": "abc@example.com",
   "mobileNumber": "01712345679",
   "permissions": {
     "createInvoice": true,
