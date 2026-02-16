@@ -1,0 +1,45 @@
+### Lab Test Management API - REST Client
+### Base URL
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+### 1. GET All Tests
+GET {{baseUrl}}/invoice/required-data
+Content-Type: {{contentType}}
+
+### 2. CREATE New Test (Online - with Schema)
+POST {{baseUrl}}/test
+Content-Type: {{contentType}}
+
+{
+  "name": "Complete Blood Count pro",
+  "testId": "693d9f18a2469caf76ab7826",
+  "categoryId": "693d9f18a2469caf76ab7825",
+  "schemaId": "69498dad079c05581bbcbd4b",
+  "price": 500
+}
+
+### 3. GET Single Test by testId
+GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
+Content-Type: {{contentType}}
+
+### 4. UPDATE Test (Price and/or Schema)
+PATCH {{baseUrl}}/test/6959379448008ead67c37841
+Content-Type: {{contentType}}
+
+{
+  "price": 600,
+  "schemaId": "69498dad079c05581bbcbd4b"
+}
+
+### 5. DELETE Test (Hard Delete)
+DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
+
+### 6. GET Test Categories
+GET {{baseUrl}}/test/categories
+
+### 7. GET Full Test Catalog
+GET {{baseUrl}}/test/catalog
+
+### 8. GET Active Test Schema by Test ID
+GET {{baseUrl}}/test/schema/693d9f18a2469caf76ab7826

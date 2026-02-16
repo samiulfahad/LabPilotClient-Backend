@@ -4,9 +4,10 @@ import mongodb from "@fastify/mongodb";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import dotenv from "dotenv";
-import referrerRoutes from "./routes/referrers/referrers.js";
-import staffRoutes from './routes/staffs/staffs.js';
-import labTestRoutes from './routes/labTest/labTest.js'
+import referrerRoutes from "./routes/referrer/index.js";
+import staffRoutes from './routes/staff/index.js';
+import labTestRoutes from './routes/labTest/index.js'
+import invoiceRoutes from './routes/invoice/index.js';
 
 dotenv.config();
 
@@ -52,6 +53,8 @@ await fastify.register(swaggerUi, {
 fastify.register(referrerRoutes, { prefix: "/api/v1" });
 fastify.register(staffRoutes, { prefix: '/api/v1' });
 fastify.register(labTestRoutes, { prefix: '/api/v1' });
+fastify.register(invoiceRoutes, { prefix: '/api/v1' });
+
 
 const start = async () => {
   try {
