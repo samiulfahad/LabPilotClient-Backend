@@ -23,16 +23,16 @@ async function routes(fastify, options) {
     }
   });
 
-
-
   // POST create invoice
   const generateInvoiceId = () => {
     const now = new Date();
-    return `${String(now.getFullYear() % 100).padStart(2, "0")}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+    const id = `${String(now.getFullYear() % 100).padStart(2, "0")}${String(now.getMonth() + 1).padStart(2, "0")}${String(
       now.getDate(),
     ).padStart(2, "0")}${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(
       now.getSeconds(),
     ).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0").slice(0, 2)}`;
+
+    return parseInt(id, 10); // or: return +id;
   };
 
   fastify.post("/invoice/add", async (req, reply) => {
@@ -51,6 +51,7 @@ async function routes(fastify, options) {
         hasLabAdjustment,
         labAdjustmentAmount,
         finalPrice,
+        paidAmount
       } = req.body;
 
       const invoicesCollection = fastify.mongo.db.collection("invoices");
@@ -76,7 +77,7 @@ async function routes(fastify, options) {
         gender,
         age,
         contactNumber,
-        referredBy: referredBy ? new ObjectId(referredBy) : null,
+        referredBy: referredBy,
         tests: tests.map((test) => ({
           testId: new ObjectId(test.testId),
           name: test.name,
@@ -91,84 +92,86 @@ async function routes(fastify, options) {
         hasLabAdjustment,
         labAdjustmentAmount,
         finalPrice,
+        paidAmount,
+        isDelivered: false
       };
 
       const result = await invoicesCollection.insertOne(invoiceDoc);
-
+      // console.log(result);
       return reply.code(201).send({ invoiceId, link: "https:/labpilotpro.com/" + invoiceId });
     } catch (error) {
-      req.log.error(error);
+      console.log(error);
       return reply.code(500).send({ error: "Failed to create invoice" });
     }
   });
 
-
   // GET all invoices
-fastify.get("/invoice/all", async (req, reply) => {
-  try {
-    const invoicesCollection = fastify.mongo.db.collection("invoices");
+  fastify.get("/invoice/all", async (req, reply) => {
+    try {
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
 
-    const invoices = await invoicesCollection
-      .aggregate([
-        {
-          $lookup: {
-            from: "referrers",
-            localField: "referredBy",
-            foreignField: "_id",
-            as: "referredBy",
+      const invoices = await invoicesCollection
+        .aggregate([
+          {
+            $lookup: {
+              from: "referrers",
+              localField: "referredBy",
+              foreignField: "_id",
+              as: "referredBy",
+            },
           },
-        },
-        {
-          $addFields: {
-            referredBy: { $arrayElemAt: ["$referredBy", 0] },
+          {
+            $addFields: {
+              referredBy: { $arrayElemAt: ["$referredBy", 0] },
+            },
           },
-        },
-        { $sort: { invoiceId: -1 } },
-      ])
-      .toArray();
+          { $sort: { invoiceId: -1 } },
+        ])
+        .toArray();
 
-    return reply.send(invoices);
-  } catch (error) {
-    req.log.error(error);
-    return reply.code(500).send({ error: "Failed to fetch invoices" });
-  }
-});
-
-// GET single invoice by invoiceId
-fastify.get("/invoice/:invoiceId", async (req, reply) => {
-  try {
-    const { invoiceId } = req.params;
-    const invoicesCollection = fastify.mongo.db.collection("invoices");
-
-    const [invoice] = await invoicesCollection
-      .aggregate([
-        { $match: { invoiceId } },
-        {
-          $lookup: {
-            from: "referrers",
-            localField: "referredBy",
-            foreignField: "_id",
-            as: "referredBy",
-          },
-        },
-        {
-          $addFields: {
-            referredBy: { $arrayElemAt: ["$referredBy", 0] },
-          },
-        },
-      ])
-      .toArray();
-
-    if (!invoice) {
-      return reply.code(404).send({ error: "Invoice not found" });
+      return reply.send(invoices);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch invoices" });
     }
+  });
 
-    return reply.send(invoice);
-  } catch (error) {
-    req.log.error(error);
-    return reply.code(500).send({ error: "Failed to fetch invoice" });
-  }
-});
+  // GET single invoice by invoiceId
+  fastify.get("/invoice/:invoiceId", async (req, reply) => {
+    try {
+      let { invoiceId } = req.params;
+      invoiceId = parseInt(invoiceId)
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+      // console.log(invoiceId);
+      const [invoice] = await invoicesCollection
+        .aggregate([
+          { $match: { invoiceId: invoiceId } },
+          {
+            $lookup: {
+              from: "referrers",
+              localField: "referredBy",
+              foreignField: "_id",
+              as: "referredBy",
+            },
+          },
+          {
+            $addFields: {
+              referredBy: { $arrayElemAt: ["$referredBy", 0] },
+            },
+          },
+        ])
+        .toArray();
+
+      if (!invoice) {
+        return reply.code(404).send({ error: "Invoice not found" });
+      }
+
+      return reply.send(invoice);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch invoice" });
+    }
+  });
 }
 
 export default routes;

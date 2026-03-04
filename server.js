@@ -11,7 +11,7 @@ import invoiceRoutes from './routes/invoice/index.js';
 
 dotenv.config();
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ logger: false });
 
 // CORS
 await fastify.register(cors, { origin: true, methods: ["GET", "POST", "PUT", "DELETE", "PATCH"] });
