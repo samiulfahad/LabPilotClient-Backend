@@ -32,7 +32,7 @@ async function routes(fastify, options) {
       now.getSeconds(),
     ).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0").slice(0, 2)}`;
 
-    return parseInt(id, 10); // or: return +id;
+    return parseInt(id, 10);
   };
 
   fastify.post("/invoice/add", async (req, reply) => {
@@ -51,7 +51,7 @@ async function routes(fastify, options) {
         hasLabAdjustment,
         labAdjustmentAmount,
         finalPrice,
-        paidAmount
+        paidAmount,
       } = req.body;
 
       const invoicesCollection = fastify.mongo.db.collection("invoices");
@@ -64,7 +64,7 @@ async function routes(fastify, options) {
           invoiceId = candidate;
           break;
         }
-        await new Promise((res) => setTimeout(res, 10)); // wait 10ms so next ms ticks
+        await new Promise((res) => setTimeout(res, 10));
       }
 
       if (!invoiceId) {
@@ -93,11 +93,10 @@ async function routes(fastify, options) {
         labAdjustmentAmount,
         finalPrice,
         paidAmount,
-        isDelivered: false
+        isDelivered: false,
       };
 
       const result = await invoicesCollection.insertOne(invoiceDoc);
-      // console.log(result);
       return reply.code(201).send({ invoiceId, link: "https:/labpilotpro.com/" + invoiceId });
     } catch (error) {
       console.log(error);
@@ -140,9 +139,9 @@ async function routes(fastify, options) {
   fastify.get("/invoice/:invoiceId", async (req, reply) => {
     try {
       let { invoiceId } = req.params;
-      invoiceId = parseInt(invoiceId)
+      invoiceId = parseInt(invoiceId);
       const invoicesCollection = fastify.mongo.db.collection("invoices");
-      // console.log(invoiceId);
+
       const [invoice] = await invoicesCollection
         .aggregate([
           { $match: { invoiceId: invoiceId } },
@@ -170,6 +169,96 @@ async function routes(fastify, options) {
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch invoice" });
+    }
+  });
+
+  // PATCH update patient info only (name, gender, age, contactNumber)
+  fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
+    try {
+      let { invoiceId } = req.params;
+      invoiceId = parseInt(invoiceId);
+
+      const { patientName, gender, age, contactNumber } = req.body;
+
+      if (!patientName || !gender || !age || !contactNumber) {
+        return reply.code(400).send({ error: "patientName, gender, age, and contactNumber are all required" });
+      }
+
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+
+      const invoice = await invoicesCollection.findOne({ invoiceId });
+      if (!invoice) {
+        return reply.code(404).send({ error: "Invoice not found" });
+      }
+
+      await invoicesCollection.updateOne(
+        { invoiceId },
+        {
+          $set: {
+            patientName: patientName.trim(),
+            gender,
+            age: Number(age),
+            contactNumber: contactNumber.trim(),
+          },
+        },
+      );
+
+      return reply.send({ success: true, patientName, gender, age: Number(age), contactNumber });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to update patient info" });
+    }
+  });
+
+  // PATCH collect due — sets paidAmount = finalPrice so due becomes 0
+  fastify.patch("/invoice/:invoiceId/collect-due", async (req, reply) => {
+    try {
+      let { invoiceId } = req.params;
+      invoiceId = parseInt(invoiceId);
+
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+
+      const invoice = await invoicesCollection.findOne({ invoiceId });
+      if (!invoice) {
+        return reply.code(404).send({ error: "Invoice not found" });
+      }
+
+      const result = await invoicesCollection.updateOne({ invoiceId }, { $set: { paidAmount: invoice.finalPrice } });
+
+      if (result.modifiedCount === 0) {
+        return reply.code(400).send({ error: "Nothing to update" });
+      }
+
+      return reply.send({ success: true, paidAmount: invoice.finalPrice });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to collect due amount" });
+    }
+  });
+
+  // PATCH mark delivered — sets isDelivered = true (one-way only)
+  fastify.patch("/invoice/:invoiceId/mark-delivered", async (req, reply) => {
+    try {
+      let { invoiceId } = req.params;
+      invoiceId = parseInt(invoiceId);
+
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+
+      const invoice = await invoicesCollection.findOne({ invoiceId });
+      if (!invoice) {
+        return reply.code(404).send({ error: "Invoice not found" });
+      }
+
+      if (invoice.isDelivered) {
+        return reply.code(400).send({ error: "Invoice is already marked as delivered" });
+      }
+
+      await invoicesCollection.updateOne({ invoiceId }, { $set: { isDelivered: true } });
+
+      return reply.send({ success: true });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to mark invoice as delivered" });
     }
   });
 }
