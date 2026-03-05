@@ -22,15 +22,12 @@ async function routes(fastify, options) {
     }
   });
 
-  // POST create invoice
-
   const generateInvoiceId = () => {
-    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const digits = "0123456789";
+    const letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ";
+    const digits = "123456789";
 
     let id = "";
 
-    // 3 unique letters
     const letterPool = letters.split("");
     for (let i = 0; i < 3; i++) {
       const idx = Math.floor(Math.random() * letterPool.length);
@@ -38,7 +35,6 @@ async function routes(fastify, options) {
       letterPool.splice(idx, 1);
     }
 
-    // 4 unique digits
     const digitPool = digits.split("");
     for (let i = 0; i < 4; i++) {
       const idx = Math.floor(Math.random() * digitPool.length);
@@ -49,7 +45,7 @@ async function routes(fastify, options) {
     return id;
   };
 
- // ============================================================================
+  // ============================================================================
   // POST create invoice
   // ============================================================================
   fastify.post("/invoice/add", async (req, reply) => {
@@ -73,7 +69,6 @@ async function routes(fastify, options) {
 
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
-      // Generate a unique invoice ID with up to 5 attempts
       let invoiceId;
       for (let attempt = 0; attempt < 5; attempt++) {
         const candidate = generateInvoiceId();
@@ -123,22 +118,31 @@ async function routes(fastify, options) {
     }
   });
 
-
-  // GET all invoices — paginated
-fastify.get("/invoice/all", async (req, reply) => {
+  // ============================================================================
+  // GET all invoices — paginated + optional date-range filter
+  // ============================================================================
+  fastify.get("/invoice/all", async (req, reply) => {
     try {
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
       const limit = Math.min(parseInt(req.query.limit) || 20, 100);
       const cursor = req.query.cursor ? parseInt(req.query.cursor) : null;
+      const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
+      const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
 
-      const matchStage = cursor
-        ? { $match: { createdAt: { $lt: cursor } } }
-        : { $match: {} };
+      // console.log(startDate, endDate);
+      // Build match filter — date range and cursor can coexist on createdAt
+      const filter = {};
+      if (startDate || endDate || cursor) {
+        filter.createdAt = {};
+        if (startDate) filter.createdAt.$gte = startDate;
+        if (endDate) filter.createdAt.$lte = endDate;
+        if (cursor) filter.createdAt.$lt = cursor; // pagination within the range
+      }
 
       const invoices = await invoicesCollection
         .aggregate([
-          matchStage,
+          { $match: filter },
           { $sort: { createdAt: -1 } },
           { $limit: limit + 1 },
           {
