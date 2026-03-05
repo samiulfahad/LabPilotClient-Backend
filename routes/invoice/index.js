@@ -1,5 +1,4 @@
 import { ObjectId } from "mongodb";
-
 const collectionName = "myTestList";
 
 async function routes(fastify, options) {
@@ -24,17 +23,35 @@ async function routes(fastify, options) {
   });
 
   // POST create invoice
-  const generateInvoiceId = () => {
-    const now = new Date();
-    const id = `${String(now.getFullYear() % 100).padStart(2, "0")}${String(now.getMonth() + 1).padStart(2, "0")}${String(
-      now.getDate(),
-    ).padStart(2, "0")}${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(
-      now.getSeconds(),
-    ).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0").slice(0, 2)}`;
 
-    return parseInt(id, 10);
+  const generateInvoiceId = () => {
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const digits = "0123456789";
+
+    let id = "";
+
+    // 3 unique letters
+    const letterPool = letters.split("");
+    for (let i = 0; i < 3; i++) {
+      const idx = Math.floor(Math.random() * letterPool.length);
+      id += letterPool[idx];
+      letterPool.splice(idx, 1);
+    }
+
+    // 4 unique digits
+    const digitPool = digits.split("");
+    for (let i = 0; i < 4; i++) {
+      const idx = Math.floor(Math.random() * digitPool.length);
+      id += digitPool[idx];
+      digitPool.splice(idx, 1);
+    }
+
+    return id;
   };
 
+ // ============================================================================
+  // POST create invoice
+  // ============================================================================
   fastify.post("/invoice/add", async (req, reply) => {
     try {
       const {
@@ -56,6 +73,7 @@ async function routes(fastify, options) {
 
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
+      // Generate a unique invoice ID with up to 5 attempts
       let invoiceId;
       for (let attempt = 0; attempt < 5; attempt++) {
         const candidate = generateInvoiceId();
@@ -73,11 +91,12 @@ async function routes(fastify, options) {
 
       const invoiceDoc = {
         invoiceId,
+        createdAt: Date.now(),
         patientName,
         gender,
         age,
         contactNumber,
-        referredBy: referredBy,
+        referredBy,
         tests: tests.map((test) => ({
           testId: new ObjectId(test.testId),
           name: test.name,
@@ -96,21 +115,32 @@ async function routes(fastify, options) {
         isDelivered: false,
       };
 
-      const result = await invoicesCollection.insertOne(invoiceDoc);
-      return reply.code(201).send({ invoiceId, link: "https:/labpilotpro.com/" + invoiceId });
+      await invoicesCollection.insertOne(invoiceDoc);
+      return reply.code(201).send({ invoiceId, link: "https://labpilotpro.com/" + invoiceId });
     } catch (error) {
-      console.log(error);
+      req.log.error(error);
       return reply.code(500).send({ error: "Failed to create invoice" });
     }
   });
 
-  // GET all invoices
-  fastify.get("/invoice/all", async (req, reply) => {
+
+  // GET all invoices — paginated
+fastify.get("/invoice/all", async (req, reply) => {
     try {
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+      const cursor = req.query.cursor ? parseInt(req.query.cursor) : null;
+
+      const matchStage = cursor
+        ? { $match: { createdAt: { $lt: cursor } } }
+        : { $match: {} };
+
       const invoices = await invoicesCollection
         .aggregate([
+          matchStage,
+          { $sort: { createdAt: -1 } },
+          { $limit: limit + 1 },
           {
             $lookup: {
               from: "referrers",
@@ -124,11 +154,15 @@ async function routes(fastify, options) {
               referredBy: { $arrayElemAt: ["$referredBy", 0] },
             },
           },
-          { $sort: { invoiceId: -1 } },
         ])
         .toArray();
 
-      return reply.send(invoices);
+      const hasMore = invoices.length > limit;
+      if (hasMore) invoices.pop();
+
+      const nextCursor = hasMore ? invoices[invoices.length - 1].createdAt : null;
+
+      return reply.send({ invoices, nextCursor, hasMore });
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch invoices" });
@@ -138,8 +172,7 @@ async function routes(fastify, options) {
   // GET single invoice by invoiceId
   fastify.get("/invoice/:invoiceId", async (req, reply) => {
     try {
-      let { invoiceId } = req.params;
-      invoiceId = parseInt(invoiceId);
+      const { invoiceId } = req.params;
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
       const [invoice] = await invoicesCollection
@@ -175,8 +208,7 @@ async function routes(fastify, options) {
   // PATCH update patient info only (name, gender, age, contactNumber)
   fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
     try {
-      let { invoiceId } = req.params;
-      invoiceId = parseInt(invoiceId);
+      const { invoiceId } = req.params;
 
       const { patientName, gender, age, contactNumber } = req.body;
 
@@ -213,11 +245,8 @@ async function routes(fastify, options) {
   // PATCH collect due — sets paidAmount = finalPrice so due becomes 0
   fastify.patch("/invoice/:invoiceId/collect-due", async (req, reply) => {
     try {
-      let { invoiceId } = req.params;
-      invoiceId = parseInt(invoiceId);
-
+      const { invoiceId } = req.params;
       const invoicesCollection = fastify.mongo.db.collection("invoices");
-
       const invoice = await invoicesCollection.findOne({ invoiceId });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
@@ -228,7 +257,6 @@ async function routes(fastify, options) {
       if (result.modifiedCount === 0) {
         return reply.code(400).send({ error: "Nothing to update" });
       }
-
       return reply.send({ success: true, paidAmount: invoice.finalPrice });
     } catch (error) {
       req.log.error(error);
@@ -239,22 +267,16 @@ async function routes(fastify, options) {
   // PATCH mark delivered — sets isDelivered = true (one-way only)
   fastify.patch("/invoice/:invoiceId/mark-delivered", async (req, reply) => {
     try {
-      let { invoiceId } = req.params;
-      invoiceId = parseInt(invoiceId);
-
+      const { invoiceId } = req.params;
       const invoicesCollection = fastify.mongo.db.collection("invoices");
-
       const invoice = await invoicesCollection.findOne({ invoiceId });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
-
       if (invoice.isDelivered) {
         return reply.code(400).send({ error: "Invoice is already marked as delivered" });
       }
-
       await invoicesCollection.updateOne({ invoiceId }, { $set: { isDelivered: true } });
-
       return reply.send({ success: true });
     } catch (error) {
       req.log.error(error);
