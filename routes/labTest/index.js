@@ -196,6 +196,26 @@ async function routes(fastify, options) {
       return reply.code(500).send({ error: "Failed to fetch test formats" });
     }
   });
+
+   // GET Schema by schemaId
+  fastify.get("/schema/:schemaId", async (req, reply) => {
+    try {
+      const { schemaId } = req.params;
+      console.log(schemaId);
+      const schemasCollection = fastify.mongo.db.collection("testSchema");
+
+      const schema = await schemasCollection.findOne({ _id: new ObjectId(schemaId) });
+
+      if (!schema) {
+        return reply.code(404).send({ error: "Schema not found" });
+      }
+
+      return reply.send(schema);
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch schema" });
+    }
+  });
 }
 
 export default routes;

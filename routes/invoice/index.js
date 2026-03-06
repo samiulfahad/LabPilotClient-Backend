@@ -85,6 +85,7 @@ async function routes(fastify, options) {
       }
 
       const invoiceDoc = {
+        labId: 123456,
         invoiceId,
         createdAt: Date.now(),
         patientName,
