@@ -8,6 +8,7 @@ import referrerRoutes from "./routes/referrer/index.js";
 import staffRoutes from './routes/staff/index.js';
 import labTestRoutes from './routes/labTest/index.js'
 import invoiceRoutes from './routes/invoice/index.js';
+import reportRoutes from "./routes/report/report.js";
 
 dotenv.config();
 
@@ -54,6 +55,7 @@ fastify.register(referrerRoutes, { prefix: "/api/v1" });
 fastify.register(staffRoutes, { prefix: '/api/v1' });
 fastify.register(labTestRoutes, { prefix: '/api/v1' });
 fastify.register(invoiceRoutes, { prefix: '/api/v1' });
+fastify.register(reportRoutes, { prefix: '/api/v1' });
 
 
 const start = async () => {
