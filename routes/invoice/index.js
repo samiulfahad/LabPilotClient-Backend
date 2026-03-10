@@ -121,6 +121,7 @@ async function routes(fastify, options) {
 
   // ============================================================================
   // GET all invoices — paginated + optional date-range filter
+  // excludes soft-deleted invoices
   // ============================================================================
   fastify.get("/invoice/all", async (req, reply) => {
     try {
@@ -131,14 +132,12 @@ async function routes(fastify, options) {
       const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
       const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
 
-      // console.log(startDate, endDate);
-      // Build match filter — date range and cursor can coexist on createdAt
-      const filter = {};
+      const filter = { isDeleted: { $ne: true } };
       if (startDate || endDate || cursor) {
         filter.createdAt = {};
         if (startDate) filter.createdAt.$gte = startDate;
         if (endDate) filter.createdAt.$lte = endDate;
-        if (cursor) filter.createdAt.$lt = cursor; // pagination within the range
+        if (cursor) filter.createdAt.$lt = cursor;
       }
 
       const invoices = await invoicesCollection
@@ -286,6 +285,74 @@ async function routes(fastify, options) {
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to mark invoice as delivered" });
+    }
+  });
+
+  // ============================================================================
+  // PATCH soft-delete invoice
+  // ============================================================================
+  fastify.patch("/invoice/:invoiceId/delete", async (req, reply) => {
+    try {
+      const { invoiceId } = req.params;
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+      const invoice = await invoicesCollection.findOne({ invoiceId });
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      if (invoice.isDeleted) return reply.code(400).send({ error: "Invoice is already deleted" });
+      await invoicesCollection.updateOne({ invoiceId }, { $set: { isDeleted: true, deletedAt: Date.now() } });
+      return reply.send({ success: true });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to delete invoice" });
+    }
+  });
+
+  // ============================================================================
+  // GET deleted invoices — paginated + date-range filter (on deletedAt)
+  // ============================================================================
+  fastify.get("/invoice/deleted", async (req, reply) => {
+    try {
+      const invoicesCollection = fastify.mongo.db.collection("invoices");
+
+      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+      const cursor = req.query.cursor ? parseInt(req.query.cursor) : null;
+      const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
+      const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
+
+      const filter = { isDeleted: true };
+      if (startDate || endDate || cursor) {
+        filter.deletedAt = {};
+        if (startDate) filter.deletedAt.$gte = startDate;
+        if (endDate) filter.deletedAt.$lte = endDate;
+        if (cursor) filter.deletedAt.$lt = cursor;
+      }
+
+      const invoices = await invoicesCollection
+        .aggregate([
+          { $match: filter },
+          { $sort: { deletedAt: -1 } },
+          { $limit: limit + 1 },
+          {
+            $lookup: {
+              from: "referrers",
+              localField: "referredBy",
+              foreignField: "_id",
+              as: "referredBy",
+            },
+          },
+          {
+            $addFields: { referredBy: { $arrayElemAt: ["$referredBy", 0] } },
+          },
+        ])
+        .toArray();
+
+      const hasMore = invoices.length > limit;
+      if (hasMore) invoices.pop();
+      const nextCursor = hasMore ? invoices[invoices.length - 1].deletedAt : null;
+
+      return reply.send({ invoices, nextCursor, hasMore });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to fetch deleted invoices" });
     }
   });
 }
