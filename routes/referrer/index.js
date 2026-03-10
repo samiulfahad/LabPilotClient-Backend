@@ -14,7 +14,6 @@ async function routes(fastify, options) {
   // GET all referrers
   fastify.get("/referrers", async (req, reply) => {
     const referrers = await collection.find({}).sort({ createdAt: -1 }).toArray();
-
     return referrers.map(toClientFormat);
   });
 
@@ -33,12 +32,14 @@ async function routes(fastify, options) {
 
   // POST - Create Referrer
   fastify.post("/referrer/add", async (req, reply) => {
-    const { type, _id, ...data } = req.body; // remove frontend-only fields
+    const { formType, _id, ...data } = req.body; // strip frontend-only fields only
 
     // Validation
     if (!data.name?.trim()) return reply.code(400).send({ error: "Name is required" });
     if (!data.contactNumber?.trim()) return reply.code(400).send({ error: "Contact number is required" });
-
+    if (!["doctor", "agent", "institute"].includes(data.type)) {
+      return reply.code(400).send({ error: "Invalid referrer type" });
+    }
     if (data.commissionType === "percentage") {
       if (data.commissionValue < 0 || data.commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
@@ -62,7 +63,20 @@ async function routes(fastify, options) {
   // PUT - Update Referrer
   fastify.put("/referrer/edit/:id", async (req, reply) => {
     const { id } = req.params;
-    const { type, _id, ...data } = req.body;
+    const { formType, _id, ...data } = req.body; // strip frontend-only fields only
+
+    // Validation
+    if (data.type && !["doctor", "agent", "institute"].includes(data.type)) {
+      return reply.code(400).send({ error: "Invalid referrer type" });
+    }
+    if (data.commissionType === "percentage") {
+      if (data.commissionValue < 0 || data.commissionValue > 100) {
+        return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
+      }
+    }
+    if (data.commissionValue < 0) {
+      return reply.code(400).send({ error: "Commission value cannot be negative" });
+    }
 
     const updateData = {
       ...data,
@@ -96,7 +110,6 @@ async function routes(fastify, options) {
 
     return { message: "Referrer deactivated successfully", _id: id };
   });
-
 
   // PATCH - Activate Referrer
   fastify.patch("/referrer/:id/activate", async (req, reply) => {

@@ -56,6 +56,7 @@ async function routes(fastify, options) {
         age,
         contactNumber,
         referredBy,
+        referrerCommission,
         tests,
         totalAmount,
         referrerDiscountPercentage,
@@ -111,7 +112,7 @@ async function routes(fastify, options) {
       await invoicesCollection.insertOne(invoiceDoc);
       return reply.code(201).send({ invoiceId, link: "https://labpilotpro.com/" + invoiceId });
     } catch (error) {
-      req.log.error(error);
+      console.log(error);
       return reply.code(500).send({ error: "Failed to create invoice" });
     }
   });
