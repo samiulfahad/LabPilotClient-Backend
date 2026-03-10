@@ -60,11 +60,14 @@ async function routes(fastify, options) {
         tests,
         totalAmount,
         referrerDiscountPercentage,
+        referrerDiscountFixedAmount,
         priceAfterReferrerDiscount,
         labAdjustmentAmount,
         finalPrice,
         paidAmount,
       } = req.body;
+
+      // console.log(req.body);
 
       const invoicesCollection = fastify.mongo.db.collection("invoices");
 
@@ -101,6 +104,7 @@ async function routes(fastify, options) {
         })),
         totalAmount,
         referrerDiscountPercentage,
+        referrerDiscountFixedAmount,
         priceAfterReferrerDiscount,
         referrerCommission,
         labAdjustmentAmount,
