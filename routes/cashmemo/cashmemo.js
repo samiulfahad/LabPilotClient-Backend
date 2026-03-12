@@ -173,6 +173,29 @@ async function routes(fastify, options) {
 
                 // ── Branch B: deleted invoices — count only ─────────────────────
                 deleted: [{ $match: { isDeleted: true } }, { $count: "deletedCount" }],
+
+                // ── Branch C: test frequency ────────────────────────────────────
+                // $unwind flattens tests[] so each test element becomes its own doc,
+                // then $group counts by test name. Sorted descending by count.
+                // Only considers active (non-deleted) invoices.
+                testCounts: [
+                  { $match: { isDeleted: { $ne: true } } },
+                  { $unwind: "$tests" },
+                  {
+                    $group: {
+                      _id: "$tests.name",
+                      count: { $sum: 1 },
+                    },
+                  },
+                  { $sort: { count: -1 } },
+                  {
+                    $project: {
+                      _id: 0,
+                      name: "$_id",
+                      count: 1,
+                    },
+                  },
+                ],
               },
             },
           ],
@@ -205,8 +228,9 @@ async function routes(fastify, options) {
 
       const activeSummary = facetResult.active[0] ?? zero;
       const deletedCount = facetResult.deleted[0]?.deletedCount ?? 0;
+      const testCounts = facetResult.testCounts ?? []; // [{ name, count }, ...]
 
-      return reply.send({ ...activeSummary, deletedCount });
+      return reply.send({ ...activeSummary, deletedCount, testCounts });
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch cash memo summary" });
