@@ -9,7 +9,8 @@ import staffRoutes from "./routes/staff/index.js";
 import labTestRoutes from "./routes/labTest/index.js";
 import invoiceRoutes from "./routes/invoice/index.js";
 import reportRoutes from "./routes/report/report.js";
-import cashmemoRoutes from "./routes/cashmemo/cashmemo.js"
+import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
+import commissionRoutes from "./routes/commission/commission.js";
 
 dotenv.config();
 
@@ -17,7 +18,12 @@ const fastify = Fastify({ logger: false });
 
 // CORS
 await fastify.register(cors, {
-  origin: ["https://sfahad.netlify.app", "https://sfahad-admin.netlify.app", "http://localhost:5173", "http://localhost:5174"],
+  origin: [
+    "https://sfahad.netlify.app",
+    "https://sfahad-admin.netlify.app",
+    "http://localhost:5173",
+    "http://localhost:5174",
+  ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
 });
 
@@ -56,6 +62,7 @@ await fastify.register(swaggerUi, {
 
 // Routes
 fastify.register(cashmemoRoutes, { prefix: "/api/v1" });
+fastify.register(commissionRoutes, { prefix: "/api/v1" });
 fastify.register(referrerRoutes, { prefix: "/api/v1" });
 fastify.register(staffRoutes, { prefix: "/api/v1" });
 fastify.register(labTestRoutes, { prefix: "/api/v1" });
