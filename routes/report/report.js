@@ -5,10 +5,7 @@ async function reportRoutes(fastify, options) {
 
   // ============================================================================
   // POST /report/add
-  // Body: { report: <SchemaRenderer payload>, invoiceId: "RAE3956", testId: "..." }
-  //
-  // Finds the matching test inside invoice.tests[] by testId,
-  // sets tests[i].report = payload and tests[i].isCompleted = true
+  // Body: { report, invoiceId, testId }
   // ============================================================================
   fastify.post("/report/add", async (req, reply) => {
     try {
@@ -23,7 +20,6 @@ async function reportRoutes(fastify, options) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
 
-      // Find the index of the matching test
       const testIndex = invoice.tests.findIndex((t) => t.testId.toString() === testId.toString());
 
       if (testIndex === -1) {
@@ -34,12 +30,23 @@ async function reportRoutes(fastify, options) {
         return reply.code(400).send({ error: "Report already submitted for this test. Use update instead." });
       }
 
-      // Build the dynamic $set key for the specific test in the array
+      // Preserve any dates that were set before the report was uploaded
+      const existingReport = invoice.tests[testIndex].report ?? {};
+      const reportWithDates = {
+        ...report,
+        ...(existingReport.sampleCollectionDate !== undefined && {
+          sampleCollectionDate: existingReport.sampleCollectionDate,
+        }),
+        ...(existingReport.reportDate !== undefined && {
+          reportDate: existingReport.reportDate,
+        }),
+      };
+
       const result = await invoicesCollection().updateOne(
         { invoiceId },
         {
           $set: {
-            [`tests.${testIndex}.report`]: report,
+            [`tests.${testIndex}.report`]: reportWithDates,
             [`tests.${testIndex}.isCompleted`]: true,
             [`tests.${testIndex}.completedAt`]: Date.now(),
           },
@@ -59,9 +66,7 @@ async function reportRoutes(fastify, options) {
 
   // ============================================================================
   // PUT /report/update
-  // Body: { report: <SchemaRenderer payload>, invoiceId: "RAE3956", testId: "..." }
-  //
-  // Same lookup — overwrites tests[i].report with the new payload
+  // Body: { report, invoiceId, testId }
   // ============================================================================
   fastify.put("/report/update", async (req, reply) => {
     try {
@@ -82,11 +87,23 @@ async function reportRoutes(fastify, options) {
         return reply.code(404).send({ error: "Test not found in this invoice" });
       }
 
+      // Preserve existing dates when overwriting report content
+      const existingReport = invoice.tests[testIndex].report ?? {};
+      const reportWithDates = {
+        ...report,
+        ...(existingReport.sampleCollectionDate !== undefined && {
+          sampleCollectionDate: existingReport.sampleCollectionDate,
+        }),
+        ...(existingReport.reportDate !== undefined && {
+          reportDate: existingReport.reportDate,
+        }),
+      };
+
       const result = await invoicesCollection().updateOne(
         { invoiceId },
         {
           $set: {
-            [`tests.${testIndex}.report`]: report,
+            [`tests.${testIndex}.report`]: reportWithDates,
             [`tests.${testIndex}.isCompleted`]: true,
             [`tests.${testIndex}.updatedAt`]: Date.now(),
           },
@@ -105,8 +122,56 @@ async function reportRoutes(fastify, options) {
   });
 
   // ============================================================================
+  // PUT /report/dates
+  // Body: { invoiceId, testId, sampleCollectionDate?, reportDate? }
+  // Works regardless of whether the report has been submitted yet
+  // ============================================================================
+  fastify.put("/report/dates", async (req, reply) => {
+    try {
+      const { invoiceId, testId, sampleCollectionDate, reportDate } = req.body;
+
+      if (!invoiceId || !testId) {
+        return reply.code(400).send({ error: "invoiceId and testId are required" });
+      }
+
+      if (sampleCollectionDate === undefined && reportDate === undefined) {
+        return reply.code(400).send({ error: "At least one of sampleCollectionDate or reportDate is required" });
+      }
+
+      const invoice = await invoicesCollection().findOne({ invoiceId });
+      if (!invoice) {
+        return reply.code(404).send({ error: "Invoice not found" });
+      }
+
+      const testIndex = invoice.tests.findIndex((t) => t.testId.toString() === testId.toString());
+
+      if (testIndex === -1) {
+        return reply.code(404).send({ error: "Test not found in this invoice" });
+      }
+
+      const dateFields = {};
+      if (sampleCollectionDate !== undefined) {
+        dateFields[`tests.${testIndex}.report.sampleCollectionDate`] = sampleCollectionDate;
+      }
+      if (reportDate !== undefined) {
+        dateFields[`tests.${testIndex}.report.reportDate`] = reportDate;
+      }
+
+      const result = await invoicesCollection().updateOne({ invoiceId }, { $set: dateFields });
+
+      if (result.modifiedCount === 0) {
+        return reply.code(400).send({ error: "Failed to update dates" });
+      }
+
+      return reply.send({ success: true });
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: "Failed to update dates" });
+    }
+  });
+
+  // ============================================================================
   // GET /report/:invoiceId/:testId
-  // Returns the embedded report for a specific test in an invoice
   // ============================================================================
   fastify.get("/report/:invoiceId/:testId", async (req, reply) => {
     try {
@@ -137,18 +202,13 @@ async function reportRoutes(fastify, options) {
 
   // ============================================================================
   // GET /report/all
-  // Returns all completed reports across all invoices — flattened list
-  // Useful for the ReportList page
   // ============================================================================
   fastify.get("/report/all", async (req, reply) => {
     try {
       const invoices = await invoicesCollection()
         .aggregate([
-          // Only invoices that have at least one completed test
           { $match: { "tests.isCompleted": true } },
-          // Unwind tests so each test becomes its own document
           { $unwind: { path: "$tests", includeArrayIndex: "testIndex" } },
-          // Only keep completed tests
           { $match: { "tests.isCompleted": true } },
           {
             $project: {
