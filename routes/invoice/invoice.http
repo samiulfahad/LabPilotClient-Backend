@@ -1,29 +1,117 @@
-### Lab Test Management API - REST Client
-### Base URL
 @baseUrl = http://localhost:5000/api/v1
 @contentType = application/json
 
-### 1. GET All Tests
+# ==============================================================================
+# INVOICE
+# ==============================================================================
+
+### GET required data (referrers + tests)
 GET {{baseUrl}}/invoice/required-data
 Content-Type: {{contentType}}
 
-### 2. CREATE New Test (Online - with Schema)
+### POST create invoice
+POST {{baseUrl}}/invoice/add
+Content-Type: {{contentType}}
+
+{
+  "patientName": "John Doe",
+  "gender": "male",
+  "age": "28",
+  "contactNumber": "01712345678",
+  "referrer": {
+    "id": "69b002efa94903cfac8249c9",
+    "name": "Dr. Smith",
+    "discount": 50,
+    "commission": 50,
+    "type": "doctor"
+  },
+  "tests": [
+    {
+      "testId": "69a8283e28af4c26b437f60d",
+      "name": "CBC",
+      "price": 300,
+      "schemaId": "69a70bcd2c76412ea1978d18"
+    }
+  ],
+  "totalAmount": 300,
+  "priceAfterReferrerDiscount": 250,
+  "labAdjustmentAmount": 0,
+  "finalPrice": 250,
+  "paidAmount": 100
+}
+
+### GET all invoices (paginated)
+GET {{baseUrl}}/invoice/all?limit=20
+Content-Type: {{contentType}}
+
+### GET all invoices (with date range)
+GET {{baseUrl}}/invoice/all?startDate=1773000000000&endDate=1773999999999&limit=20
+Content-Type: {{contentType}}
+
+### GET single invoice by invoiceId
+GET {{baseUrl}}/invoice/AZP7328
+Content-Type: {{contentType}}
+
+### PATCH update patient info
+PATCH {{baseUrl}}/invoice/AZP7328/patient-info
+Content-Type: {{contentType}}
+
+{
+  "patientName": "Jane Doe",
+  "gender": "female",
+  "age": "25",
+  "contactNumber": "01798765432"
+}
+
+### PATCH collect due amount
+PATCH {{baseUrl}}/invoice/AZP7328/collect-due
+Content-Type: {{contentType}}
+
+### PATCH mark as delivered
+PATCH {{baseUrl}}/invoice/AZP7328/mark-delivered
+Content-Type: {{contentType}}
+
+### PATCH soft delete invoice
+PATCH {{baseUrl}}/invoice/AZP7328/delete
+Content-Type: {{contentType}}
+
+### GET deleted invoices (paginated)
+GET {{baseUrl}}/invoice/deleted?limit=20
+Content-Type: {{contentType}}
+
+# ==============================================================================
+# TESTS
+# ==============================================================================
+
+### GET all test categories
+GET {{baseUrl}}/test/categories
+Content-Type: {{contentType}}
+
+### GET full test catalog
+GET {{baseUrl}}/test/catalog
+Content-Type: {{contentType}}
+
+### GET single test by testId
+GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
+Content-Type: {{contentType}}
+
+### GET active schema by testId
+GET {{baseUrl}}/test/schema/693d9f18a2469caf76ab7826
+Content-Type: {{contentType}}
+
+### POST create test
 POST {{baseUrl}}/test
 Content-Type: {{contentType}}
 
 {
-  "name": "Complete Blood Count pro",
+  "name": "Complete Blood Count",
   "testId": "693d9f18a2469caf76ab7826",
   "categoryId": "693d9f18a2469caf76ab7825",
   "schemaId": "69498dad079c05581bbcbd4b",
   "price": 500
 }
 
-### 3. GET Single Test by testId
-GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
-Content-Type: {{contentType}}
-
-### 4. UPDATE Test (Price and/or Schema)
+### PATCH update test
 PATCH {{baseUrl}}/test/6959379448008ead67c37841
 Content-Type: {{contentType}}
 
@@ -32,14 +120,6 @@ Content-Type: {{contentType}}
   "schemaId": "69498dad079c05581bbcbd4b"
 }
 
-### 5. DELETE Test (Hard Delete)
+### DELETE test (hard delete)
 DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
-
-### 6. GET Test Categories
-GET {{baseUrl}}/test/categories
-
-### 7. GET Full Test Catalog
-GET {{baseUrl}}/test/catalog
-
-### 8. GET Active Test Schema by Test ID
-GET {{baseUrl}}/test/schema/693d9f18a2469caf76ab7826
+Content-Type: {{contentType}}
