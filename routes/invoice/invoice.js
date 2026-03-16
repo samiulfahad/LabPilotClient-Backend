@@ -1,45 +1,46 @@
 import { ObjectId } from "mongodb";
 
-// ============================================================================
-// HELPERS
-// ============================================================================
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const generateInvoiceId = () => {
-  const letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ";
-  const digits = "123456789";
-
-  const letterPool = letters.split("");
-  let id = "";
-  for (let i = 0; i < 3; i++) {
-    const idx = Math.floor(Math.random() * letterPool.length);
-    id += letterPool[idx];
-    letterPool.splice(idx, 1);
-  }
-
-  const digitPool = digits.split("");
-  for (let i = 0; i < 4; i++) {
-    const idx = Math.floor(Math.random() * digitPool.length);
-    id += digitPool[idx];
-    digitPool.splice(idx, 1);
-  }
-
-  return id;
+  const pick = (pool) => {
+    const arr = pool.split("");
+    let out = "";
+    for (let i = 0; i < (pool === "123456789" ? 4 : 3); i++) {
+      const idx = Math.floor(Math.random() * arr.length);
+      out += arr.splice(idx, 1)[0];
+    }
+    return out;
+  };
+  return pick("ABCDEFGHIJKLMNPQRSTUVWXYZ") + pick("123456789");
 };
 
 const buildCursorFilter = ({ cursor, startDate, endDate, field = "createdAt" }) => {
-  const filter = {};
-  if (startDate || endDate || cursor) {
-    filter[field] = {};
-    if (startDate) filter[field].$gte = startDate;
-    if (endDate) filter[field].$lte = endDate;
-    if (cursor) filter[field].$lt = cursor;
-  }
-  return filter;
+  const range = {};
+  if (startDate) range.$gte = startDate;
+  if (endDate) range.$lte = endDate;
+  if (cursor) range.$lt = cursor;
+  return Object.keys(range).length ? { [field]: range } : {};
 };
 
-// ============================================================================
-// ROUTES
-// ============================================================================
+const parsePaginationQuery = (query) => ({
+  limit: Math.min(parseInt(query.limit) || 20, 100),
+  cursor: query.cursor ? parseInt(query.cursor) : null,
+  startDate: query.startDate ? parseInt(query.startDate) : null,
+  endDate: query.endDate ? parseInt(query.endDate) : null,
+});
+
+const paginatedResponse = (result, limit, cursorField) => {
+  const hasMore = result.length > limit;
+  if (hasMore) result.pop();
+  return {
+    invoices: result,
+    nextCursor: hasMore ? result.at(-1)[cursorField] : null,
+    hasMore,
+  };
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function routes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
@@ -52,8 +53,8 @@ async function routes(fastify) {
         fastify.mongo.db.collection("myTestList").find({}).sort({ createdAt: -1 }).toArray(),
       ]);
       return { referrers, tests };
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch required data" });
     }
   });
@@ -61,28 +62,17 @@ async function routes(fastify) {
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", async (req, reply) => {
     try {
-      // console.log(req.body);
-      const {
-        patient, // { name, gender, age, contactNumber }
-        referrer,
-        tests,
-        totalAmount,
-        priceAfterReferrerDiscount,
-        labAdjustmentAmount,
-        finalPrice,
-        paidAmount,
-      } = req.body;
+      const { patient, referrer, tests, amount } = req.body;
 
       // Generate unique invoice ID (max 5 attempts)
       let invoiceId;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let i = 0; i < 5; i++) {
         const candidate = generateInvoiceId();
-        const existing = await col().findOne({ invoiceId: candidate });
-        if (!existing) {
+        if (!(await col().findOne({ invoiceId: candidate }))) {
           invoiceId = candidate;
           break;
         }
-        await new Promise((res) => setTimeout(res, 10));
+        await new Promise((r) => setTimeout(r, 10));
       }
       if (!invoiceId)
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
@@ -91,30 +81,29 @@ async function routes(fastify) {
         labId: 123456,
         invoiceId,
         createdAt: Date.now(),
-        // ── patient object ──
         patient: {
           name: patient.name,
           gender: patient.gender,
           age: Number(patient.age),
           contactNumber: patient.contactNumber,
         },
-        // ── referrer object ──
         referrer,
-        // ── tests ──
-        tests: tests.map((test) => ({
-          testId: new ObjectId(test.testId),
-          name: test.name,
-          price: test.price,
-          schemaId: test.schemaId ? new ObjectId(test.schemaId) : null,
-          ...(test.schemaId && { report: {}, isCompleted: false }),
+        tests: tests.map((t) => ({
+          testId: new ObjectId(t.testId),
+          name: t.name,
+          price: t.price,
+          schemaId: t.schemaId ? new ObjectId(t.schemaId) : null,
+          ...(t.schemaId && { report: {}, isCompleted: false }),
         })),
-        // ── pricing ──
-        totalAmount,
-        priceAfterReferrerDiscount,
-        labAdjustmentAmount,
-        finalPrice,
-        paidAmount,
-        // ── status ──
+        amount: {
+          initial: Number(amount.initial) || 0,
+          referrerDiscount: Number(amount.referrerDiscount) || 0,
+          referrerCommission: Number(amount.referrerCommission) || 0,
+          labAdjustment: Number(amount.labAdjustment) || 0,
+          final: Number(amount.final) || 0,
+          net: Number(amount.net) || 0,
+          paid: Number(amount.paid) || 0,
+        },
         isDelivered: false,
         isDeleted: false,
       });
@@ -123,8 +112,8 @@ async function routes(fastify) {
         invoiceId,
         link: `https://labpilotpro.com/${invoiceId}`,
       });
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to create invoice" });
     }
   });
@@ -132,31 +121,19 @@ async function routes(fastify) {
   // ── GET /invoice/all — paginated + optional date-range ────────────────────
   fastify.get("/invoice/all", async (req, reply) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-      const cursor = req.query.cursor ? parseInt(req.query.cursor) : null;
-      const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
-      const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
-
+      const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
       const filter = {
         isDeleted: { $ne: true },
-        ...buildCursorFilter({ cursor, startDate, endDate, field: "createdAt" }),
+        ...buildCursorFilter({ cursor, startDate, endDate }),
       };
-
       const result = await col()
         .find(filter)
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .toArray();
-      const hasMore = result.length > limit;
-      if (hasMore) result.pop();
-
-      return reply.send({
-        invoices: result,
-        nextCursor: hasMore ? result[result.length - 1].createdAt : null,
-        hasMore,
-      });
-    } catch (error) {
-      req.log.error(error);
+      return reply.send(paginatedResponse(result, limit, "createdAt"));
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch invoices" });
     }
   });
@@ -164,31 +141,19 @@ async function routes(fastify) {
   // ── GET /invoice/deleted — paginated + optional date-range ────────────────
   fastify.get("/invoice/deleted", async (req, reply) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-      const cursor = req.query.cursor ? parseInt(req.query.cursor) : null;
-      const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
-      const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
-
+      const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
       const filter = {
         isDeleted: true,
         ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }),
       };
-
       const result = await col()
         .find(filter)
         .sort({ deletedAt: -1 })
         .limit(limit + 1)
         .toArray();
-      const hasMore = result.length > limit;
-      if (hasMore) result.pop();
-
-      return reply.send({
-        invoices: result,
-        nextCursor: hasMore ? result[result.length - 1].deletedAt : null,
-        hasMore,
-      });
-    } catch (error) {
-      req.log.error(error);
+      return reply.send(paginatedResponse(result, limit, "deletedAt"));
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch deleted invoices" });
     }
   });
@@ -199,8 +164,8 @@ async function routes(fastify) {
       const invoice = await col().findOne({ invoiceId: req.params.invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       return reply.send(invoice);
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch invoice" });
     }
   });
@@ -209,15 +174,14 @@ async function routes(fastify) {
   fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const { patient } = req.body; // { name, gender, age, contactNumber }
+      const { patient } = req.body;
 
       if (!patient?.name || !patient?.gender || !patient?.age || !patient?.contactNumber)
-        return reply
-          .code(400)
-          .send({ error: "patient.name, patient.gender, patient.age, and patient.contactNumber are all required" });
+        return reply.code(400).send({
+          error: "patient.name, patient.gender, patient.age, and patient.contactNumber are all required",
+        });
 
-      const existing = await col().findOne({ invoiceId });
-      if (!existing) return reply.code(404).send({ error: "Invoice not found" });
+      if (!(await col().findOne({ invoiceId }))) return reply.code(404).send({ error: "Invoice not found" });
 
       const update = {
         patient: {
@@ -230,8 +194,8 @@ async function routes(fastify) {
 
       await col().updateOne({ invoiceId }, { $set: update });
       return reply.send({ success: true, ...update });
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to update patient info" });
     }
   });
@@ -243,12 +207,12 @@ async function routes(fastify) {
       const invoice = await col().findOne({ invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const result = await col().updateOne({ invoiceId }, { $set: { paidAmount: invoice.finalPrice } });
+      const result = await col().updateOne({ invoiceId }, { $set: { "amount.paid": invoice.amount.final } });
       if (result.modifiedCount === 0) return reply.code(400).send({ error: "Nothing to update" });
 
-      return reply.send({ success: true, paidAmount: invoice.finalPrice });
-    } catch (error) {
-      req.log.error(error);
+      return reply.send({ success: true, paid: invoice.amount.final });
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to collect due amount" });
     }
   });
@@ -263,8 +227,8 @@ async function routes(fastify) {
 
       await col().updateOne({ invoiceId }, { $set: { isDelivered: true } });
       return reply.send({ success: true });
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to mark invoice as delivered" });
     }
   });
@@ -279,8 +243,8 @@ async function routes(fastify) {
 
       await col().updateOne({ invoiceId }, { $set: { isDeleted: true, deletedAt: Date.now() } });
       return reply.send({ success: true });
-    } catch (error) {
-      req.log.error(error);
+    } catch (err) {
+      req.log.error(err);
       return reply.code(500).send({ error: "Failed to delete invoice" });
     }
   });
