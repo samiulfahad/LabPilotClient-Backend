@@ -42,7 +42,6 @@ async function routes(fastify, options) {
           $group: {
             _id: { $ifNull: ["$referrer.id", "$referrer.name"] },
 
-            // Always use the LATEST name & type (last doc in createdAt-asc order)
             name: { $last: "$referrer.name" },
             type: { $last: "$referrer.type" },
 
@@ -56,7 +55,7 @@ async function routes(fastify, options) {
             invoices: {
               $push: {
                 invoiceId: "$invoiceId",
-                patientName: "$patientName",
+                patient: { name: "$patient.name" },
                 createdAt: "$createdAt",
                 finalPrice: "$finalPrice",
                 commission: { $ifNull: ["$referrer.commission", 0] },

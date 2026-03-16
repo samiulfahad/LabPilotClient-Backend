@@ -1,5 +1,9 @@
 import { ObjectId } from "mongodb";
 
+// ============================================================================
+// HELPERS
+// ============================================================================
+
 const generateInvoiceId = () => {
   const letters = "ABCDEFGHIJKLMNPQRSTUVWXYZ";
   const digits = "123456789";
@@ -22,12 +26,25 @@ const generateInvoiceId = () => {
   return id;
 };
 
-async function routes(fastify, options) {
-  const invoices = () => fastify.mongo.db.collection("invoices");
+const buildCursorFilter = ({ cursor, startDate, endDate, field = "createdAt" }) => {
+  const filter = {};
+  if (startDate || endDate || cursor) {
+    filter[field] = {};
+    if (startDate) filter[field].$gte = startDate;
+    if (endDate) filter[field].$lte = endDate;
+    if (cursor) filter[field].$lt = cursor;
+  }
+  return filter;
+};
 
-  // ============================================================================
-  // GET /invoice/required-data
-  // ============================================================================
+// ============================================================================
+// ROUTES
+// ============================================================================
+
+async function routes(fastify) {
+  const col = () => fastify.mongo.db.collection("invoices");
+
+  // ── GET /invoice/required-data ────────────────────────────────────────────
   fastify.get("/invoice/required-data", async (req, reply) => {
     try {
       const [referrers, tests] = await Promise.all([
@@ -41,16 +58,12 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // POST /invoice/add
-  // ============================================================================
+  // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", async (req, reply) => {
     try {
+      // console.log(req.body);
       const {
-        patientName,
-        gender,
-        age,
-        contactNumber,
+        patient, // { name, gender, age, contactNumber }
         referrer,
         tests,
         totalAmount,
@@ -60,30 +73,34 @@ async function routes(fastify, options) {
         paidAmount,
       } = req.body;
 
+      // Generate unique invoice ID (max 5 attempts)
       let invoiceId;
       for (let attempt = 0; attempt < 5; attempt++) {
         const candidate = generateInvoiceId();
-        const existing = await invoices().findOne({ invoiceId: candidate });
+        const existing = await col().findOne({ invoiceId: candidate });
         if (!existing) {
           invoiceId = candidate;
           break;
         }
         await new Promise((res) => setTimeout(res, 10));
       }
-
-      if (!invoiceId) {
+      if (!invoiceId)
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
-      }
 
-      await invoices().insertOne({
+      await col().insertOne({
         labId: 123456,
         invoiceId,
         createdAt: Date.now(),
-        patientName,
-        gender,
-        age,
-        contactNumber,
+        // ── patient object ──
+        patient: {
+          name: patient.name,
+          gender: patient.gender,
+          age: Number(patient.age),
+          contactNumber: patient.contactNumber,
+        },
+        // ── referrer object ──
         referrer,
+        // ── tests ──
         tests: tests.map((test) => ({
           testId: new ObjectId(test.testId),
           name: test.name,
@@ -91,24 +108,28 @@ async function routes(fastify, options) {
           schemaId: test.schemaId ? new ObjectId(test.schemaId) : null,
           ...(test.schemaId && { report: {}, isCompleted: false }),
         })),
+        // ── pricing ──
         totalAmount,
         priceAfterReferrerDiscount,
         labAdjustmentAmount,
         finalPrice,
         paidAmount,
+        // ── status ──
         isDelivered: false,
+        isDeleted: false,
       });
 
-      return reply.code(201).send({ invoiceId, link: "https://labpilotpro.com/" + invoiceId });
+      return reply.code(201).send({
+        invoiceId,
+        link: `https://labpilotpro.com/${invoiceId}`,
+      });
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to create invoice" });
     }
   });
 
-  // ============================================================================
-  // GET /invoice/all — paginated + optional date-range filter
-  // ============================================================================
+  // ── GET /invoice/all — paginated + optional date-range ────────────────────
   fastify.get("/invoice/all", async (req, reply) => {
     try {
       const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -116,20 +137,16 @@ async function routes(fastify, options) {
       const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
       const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
 
-      const filter = { isDeleted: { $ne: true } };
-      if (startDate || endDate || cursor) {
-        filter.createdAt = {};
-        if (startDate) filter.createdAt.$gte = startDate;
-        if (endDate) filter.createdAt.$lte = endDate;
-        if (cursor) filter.createdAt.$lt = cursor;
-      }
+      const filter = {
+        isDeleted: { $ne: true },
+        ...buildCursorFilter({ cursor, startDate, endDate, field: "createdAt" }),
+      };
 
-      const result = await invoices()
+      const result = await col()
         .find(filter)
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .toArray();
-
       const hasMore = result.length > limit;
       if (hasMore) result.pop();
 
@@ -144,9 +161,7 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // GET /invoice/deleted — paginated + optional date-range filter (on deletedAt)
-  // ============================================================================
+  // ── GET /invoice/deleted — paginated + optional date-range ────────────────
   fastify.get("/invoice/deleted", async (req, reply) => {
     try {
       const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -154,20 +169,16 @@ async function routes(fastify, options) {
       const startDate = req.query.startDate ? parseInt(req.query.startDate) : null;
       const endDate = req.query.endDate ? parseInt(req.query.endDate) : null;
 
-      const filter = { isDeleted: true };
-      if (startDate || endDate || cursor) {
-        filter.deletedAt = {};
-        if (startDate) filter.deletedAt.$gte = startDate;
-        if (endDate) filter.deletedAt.$lte = endDate;
-        if (cursor) filter.deletedAt.$lt = cursor;
-      }
+      const filter = {
+        isDeleted: true,
+        ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }),
+      };
 
-      const result = await invoices()
+      const result = await col()
         .find(filter)
         .sort({ deletedAt: -1 })
         .limit(limit + 1)
         .toArray();
-
       const hasMore = result.length > limit;
       if (hasMore) result.pop();
 
@@ -182,12 +193,10 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // GET /invoice/:invoiceId
-  // ============================================================================
+  // ── GET /invoice/:invoiceId ───────────────────────────────────────────────
   fastify.get("/invoice/:invoiceId", async (req, reply) => {
     try {
-      const invoice = await invoices().findOne({ invoiceId: req.params.invoiceId });
+      const invoice = await col().findOne({ invoiceId: req.params.invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       return reply.send(invoice);
     } catch (error) {
@@ -196,29 +205,30 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PATCH /invoice/:invoiceId/patient-info
-  // ============================================================================
+  // ── PATCH /invoice/:invoiceId/patient-info ────────────────────────────────
   fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const { patientName, gender, age, contactNumber } = req.body;
+      const { patient } = req.body; // { name, gender, age, contactNumber }
 
-      if (!patientName || !gender || !age || !contactNumber) {
-        return reply.code(400).send({ error: "patientName, gender, age, and contactNumber are all required" });
-      }
+      if (!patient?.name || !patient?.gender || !patient?.age || !patient?.contactNumber)
+        return reply
+          .code(400)
+          .send({ error: "patient.name, patient.gender, patient.age, and patient.contactNumber are all required" });
 
-      const invoice = await invoices().findOne({ invoiceId });
-      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      const existing = await col().findOne({ invoiceId });
+      if (!existing) return reply.code(404).send({ error: "Invoice not found" });
 
       const update = {
-        patientName: patientName.trim(),
-        gender,
-        age: Number(age),
-        contactNumber: contactNumber.trim(),
+        patient: {
+          name: patient.name.trim(),
+          gender: patient.gender,
+          age: Number(patient.age),
+          contactNumber: patient.contactNumber.trim(),
+        },
       };
 
-      await invoices().updateOne({ invoiceId }, { $set: update });
+      await col().updateOne({ invoiceId }, { $set: update });
       return reply.send({ success: true, ...update });
     } catch (error) {
       req.log.error(error);
@@ -226,16 +236,14 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PATCH /invoice/:invoiceId/collect-due
-  // ============================================================================
+  // ── PATCH /invoice/:invoiceId/collect-due ─────────────────────────────────
   fastify.patch("/invoice/:invoiceId/collect-due", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await invoices().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const result = await invoices().updateOne({ invoiceId }, { $set: { paidAmount: invoice.finalPrice } });
+      const result = await col().updateOne({ invoiceId }, { $set: { paidAmount: invoice.finalPrice } });
       if (result.modifiedCount === 0) return reply.code(400).send({ error: "Nothing to update" });
 
       return reply.send({ success: true, paidAmount: invoice.finalPrice });
@@ -245,17 +253,15 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PATCH /invoice/:invoiceId/mark-delivered
-  // ============================================================================
+  // ── PATCH /invoice/:invoiceId/mark-delivered ──────────────────────────────
   fastify.patch("/invoice/:invoiceId/mark-delivered", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await invoices().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDelivered) return reply.code(400).send({ error: "Invoice is already marked as delivered" });
 
-      await invoices().updateOne({ invoiceId }, { $set: { isDelivered: true } });
+      await col().updateOne({ invoiceId }, { $set: { isDelivered: true } });
       return reply.send({ success: true });
     } catch (error) {
       req.log.error(error);
@@ -263,17 +269,15 @@ async function routes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PATCH /invoice/:invoiceId/delete — soft delete
-  // ============================================================================
+  // ── PATCH /invoice/:invoiceId/delete — soft delete ────────────────────────
   fastify.patch("/invoice/:invoiceId/delete", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await invoices().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDeleted) return reply.code(400).send({ error: "Invoice is already deleted" });
 
-      await invoices().updateOne({ invoiceId }, { $set: { isDeleted: true, deletedAt: Date.now() } });
+      await col().updateOne({ invoiceId }, { $set: { isDeleted: true, deletedAt: Date.now() } });
       return reply.send({ success: true });
     } catch (error) {
       req.log.error(error);

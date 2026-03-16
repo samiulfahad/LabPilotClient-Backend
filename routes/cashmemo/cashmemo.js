@@ -136,6 +136,7 @@ async function routes(fastify, options) {
         testCounts: result.testCounts ?? [],
       });
     } catch (error) {
+      // console.log(error);
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch cash memo summary" });
     }
