@@ -91,7 +91,7 @@ async function routes(fastify) {
         },
       });
     } catch (err) {
-      req.log.error(err);
+      // console.log(err);
       return reply.code(500).send({ error: "Failed to fetch commission summary" });
     }
   });

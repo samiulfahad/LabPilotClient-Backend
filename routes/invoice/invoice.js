@@ -170,6 +170,46 @@ async function routes(fastify) {
     }
   });
 
+  // ── GET /invoice/:invoiceId/report-summary ────────────────────────────────
+  // Lean endpoint for the Reports page. Returns only what the UI needs:
+  // patient info, invoice header, amounts, and per-test status + dates.
+  // No report body, no referrer, no schema details.
+  fastify.get("/invoice/:invoiceId/report-summary", async (req, reply) => {
+    try {
+      const invoice = await col().findOne(
+        { invoiceId: req.params.invoiceId },
+        {
+          projection: {
+            _id: 0,
+            invoiceId: 1,
+            createdAt: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.initial": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            // Per test: only identity + status + dates. No report body.
+            "tests.testId": 1,
+            "tests.name": 1,
+            "tests.price": 1,
+            "tests.schemaId": 1,
+            "tests.isCompleted": 1,
+            "tests.report.sampleCollectionDate": 1,
+            "tests.report.reportDate": 1,
+          },
+        },
+      );
+
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      return reply.send(invoice);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch invoice summary" });
+    }
+  });
+
   // ── PATCH /invoice/:invoiceId/patient-info ────────────────────────────────
   fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
     try {

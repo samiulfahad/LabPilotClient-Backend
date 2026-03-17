@@ -172,6 +172,7 @@ async function reportRoutes(fastify, options) {
 
   // ============================================================================
   // GET /report/:invoiceId/:testId
+  // Returns the report + patient info from the parent invoice
   // ============================================================================
   fastify.get("/report/:invoiceId/:testId", async (req, reply) => {
     try {
@@ -193,6 +194,13 @@ async function reportRoutes(fastify, options) {
         isCompleted: test.isCompleted,
         completedAt: test.completedAt ?? null,
         updatedAt: test.updatedAt ?? null,
+        patient: invoice.patient,
+        referrer: invoice.referrer,
+        invoiceId: invoice.invoiceId,
+        testName: test.name,
+        schemaId: test.schemaId,
+        reportDate: test.report?.reportDate ?? null,
+        sampleCollectionDate: test.report?.sampleCollectionDate ?? null,
       });
     } catch (error) {
       req.log.error(error);
@@ -214,10 +222,11 @@ async function reportRoutes(fastify, options) {
             $project: {
               _id: 0,
               invoiceId: 1,
-              patientName: 1,
-              gender: 1,
-              age: 1,
-              contactNumber: 1,
+              // patient is a nested object — expose the fields explicitly
+              patientName: "$patient.name",
+              patientGender: "$patient.gender",
+              patientAge: "$patient.age",
+              contactNumber: "$patient.contactNumber",
               testId: "$tests.testId",
               testName: "$tests.name",
               schemaId: "$tests.schemaId",
