@@ -277,22 +277,21 @@ Content-Type: {{contentType}}
 
 ### PATCH collect due amount
 PATCH {{baseUrl}}/invoice/BAQ6318/collect-due
-Content-Type: {{contentType}}
+
 
 ###
 
 ### PATCH mark as delivered
 PATCH {{baseUrl}}/invoice/BAQ6318/mark-delivered
-Content-Type: {{contentType}}
+
 
 ###
 
 ### PATCH soft delete invoice
 PATCH {{baseUrl}}/invoice/BAQ6318/delete
-Content-Type: {{contentType}}
+
 
 ###
 
 ### PATCH soft delete invoice (already deleted — expect 400)
 PATCH {{baseUrl}}/invoice/BAQ6318/delete
-Content-Type: {{contentType}}

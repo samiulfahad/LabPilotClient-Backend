@@ -13,7 +13,22 @@ async function routes(fastify, options) {
 
   // GET all staff
   fastify.get("/staffs", async (req, reply) => {
-    const staff = await collection.find({}).sort({ createdAt: -1 }).toArray();
+    const staff = await collection
+      .find(
+        {},
+        {
+          projection: {
+            name: 1,
+            username: 1,
+            email: 1,
+            mobileNumber: 1,
+            permissions: 1,
+            isActive: 1,
+          },
+        },
+      )
+      .sort({ createdAt: -1 })
+      .toArray();
 
     return staff.map(toClientFormat);
   });

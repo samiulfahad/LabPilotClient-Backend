@@ -266,7 +266,21 @@ async function routes(fastify) {
         ...buildCursorFilter({ cursor, startDate, endDate }),
       };
       const result = await col()
-        .find(filter)
+        .find(filter, {
+          projection: {
+            _id: 1,
+            invoiceId: 1,
+            createdAt: 1,
+            isDelivered: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "tests.schemaId": 1,
+          },
+        })
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .toArray();
@@ -286,7 +300,21 @@ async function routes(fastify) {
         ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }),
       };
       const result = await col()
-        .find(filter)
+        .find(filter, {
+          projection: {
+            _id: 1,
+            invoiceId: 1,
+            createdAt: 1,
+            deletedAt: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "tests.schemaId": 1,
+          },
+        })
         .sort({ deletedAt: -1 })
         .limit(limit + 1)
         .toArray();
