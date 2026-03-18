@@ -1,0 +1,34 @@
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+# ==============================================================================
+# CASH MEMO
+# ==============================================================================
+
+### GET cash memo summary (today)
+GET {{baseUrl}}/cashmemo/summary?startDate=1773744000000&endDate=1773830399999
+Content-Type: {{contentType}}
+
+###
+
+### GET cash memo summary (custom date range)
+GET {{baseUrl}}/cashmemo/summary?startDate=1773000000000&endDate=1773999999999
+Content-Type: {{contentType}}
+
+###
+
+### GET cash memo summary (missing startDate — expect 400)
+GET {{baseUrl}}/cashmemo/summary?endDate=1773999999999
+Content-Type: {{contentType}}
+
+###
+
+### GET cash memo summary (missing endDate — expect 400)
+GET {{baseUrl}}/cashmemo/summary?startDate=1773000000000
+Content-Type: {{contentType}}
+
+###
+
+### GET cash memo summary (startDate > endDate — expect 400)
+GET {{baseUrl}}/cashmemo/summary?startDate=1773999999999&endDate=1773000000000
+Content-Type: {{contentType}}

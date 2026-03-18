@@ -40,17 +40,153 @@ const paginatedResponse = (result, limit, cursorField) => {
   };
 };
 
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
+const invoiceIdSchema = {
+  schema: {
+    params: {
+      type: "object",
+      required: ["invoiceId"],
+      properties: {
+        invoiceId: {
+          type: "string",
+          pattern: "^[A-Z]{3}[1-9]{4}$",
+          minLength: 7,
+          maxLength: 7,
+        },
+      },
+    },
+  },
+};
+
+const addInvoiceSchema = {
+  schema: {
+    body: {
+      type: "object",
+      required: ["patient", "tests", "amount"],
+      properties: {
+        patient: {
+          type: "object",
+          required: ["name", "gender", "age", "contactNumber"],
+          additionalProperties: false,
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 100 },
+            gender: { type: "string", enum: ["male", "female"] },
+            age: { type: "number", minimum: 0, maximum: 150 },
+            contactNumber: { type: "string", minLength: 1, maxLength: 15 },
+          },
+        },
+
+        // referrer is optional — patient may not have one
+        referrer: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: ["string", "null"], maxLength: 24 },
+            name: { type: ["string", "null"], maxLength: 150 },
+            type: { type: ["string", "null"], maxLength: 50 },
+          },
+        },
+
+        tests: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            required: ["testId", "name", "price"],
+            additionalProperties: false,
+            properties: {
+              testId: { type: "string", minLength: 1, maxLength: 24 },
+              name: { type: "string", minLength: 1, maxLength: 100 },
+              price: { type: "number", minimum: 0, maximum: 1000000 },
+              schemaId: { type: ["string", "null"], maxLength: 24 },
+            },
+          },
+        },
+
+        amount: {
+          type: "object",
+          required: ["initial", "referrerDiscount", "referrerCommission", "labAdjustment", "final", "net", "paid"],
+          additionalProperties: false,
+          properties: {
+            initial: { type: "number", minimum: 0, maximum: 10000000 },
+            referrerDiscount: { type: "number", minimum: 0, maximum: 10000000 },
+            referrerCommission: { type: "number", minimum: 0, maximum: 10000000 },
+            labAdjustment: { type: "number", minimum: 0, maximum: 10000000 },
+            final: { type: "number", minimum: 0, maximum: 10000000 },
+            net: { type: "number", minimum: 0, maximum: 10000000 },
+            paid: { type: "number", minimum: 0, maximum: 10000000 },
+          },
+        },
+      },
+    },
+  },
+};
+
+const patientInfoSchema = {
+  schema: {
+    body: {
+      type: "object",
+      required: ["patient"],
+      properties: {
+        patient: {
+          type: "object",
+          required: ["name", "gender", "age", "contactNumber"],
+          additionalProperties: false,
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 100 },
+            gender: { type: "string", enum: ["male", "female"] },
+            age: { type: "number", minimum: 0, maximum: 150 },
+            contactNumber: { type: "string", minLength: 1, maxLength: 15 },
+          },
+        },
+      },
+    },
+  },
+};
+
+const invoiceIdWithPatientInfoSchema = {
+  schema: {
+    params: invoiceIdSchema.schema.params,
+    body: patientInfoSchema.schema.body,
+  },
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function routes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
 
+  // Compound index: labId (equality) → createdAt (range) → isDeleted (filter)
+  try {
+    await fastify.mongo.db
+      .collection("invoices")
+      .createIndex(
+        { labId: 1, createdAt: -1, isDeleted: 1 },
+        { name: "idx_labId_createdAt_isDeleted", background: true },
+      );
+  } catch (err) {
+    fastify.log.warn({ err }, "invoice: could not ensure index");
+  }
+
   // ── GET /invoice/required-data ────────────────────────────────────────────
   fastify.get("/invoice/required-data", async (req, reply) => {
     try {
       const [referrers, tests] = await Promise.all([
-        fastify.mongo.db.collection("referrers").find({}).sort({ createdAt: -1 }).toArray(),
-        fastify.mongo.db.collection("myTestList").find({}).sort({ createdAt: -1 }).toArray(),
+        fastify.mongo.db
+          .collection("referrers")
+          .find(
+            { isActive: true },
+            { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
+          )
+          .sort({ name: 1 })
+          .toArray(),
+        fastify.mongo.db
+          .collection("myTestList")
+          .find({}, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
+          .sort({ createdAt: -1 })
+          .toArray(),
       ]);
       return { referrers, tests };
     } catch (err) {
@@ -60,15 +196,18 @@ async function routes(fastify) {
   });
 
   // ── POST /invoice/add ─────────────────────────────────────────────────────
-  fastify.post("/invoice/add", async (req, reply) => {
+  fastify.post("/invoice/add", addInvoiceSchema, async (req, reply) => {
     try {
       const { patient, referrer, tests, amount } = req.body;
+
+      // TODO: replace with req.user.labId from auth context
+      const labId = 123456;
 
       // Generate unique invoice ID (max 5 attempts)
       let invoiceId;
       for (let i = 0; i < 5; i++) {
         const candidate = generateInvoiceId();
-        if (!(await col().findOne({ invoiceId: candidate }))) {
+        if (!(await col().findOne({ invoiceId: candidate }, { projection: { _id: 1 } }))) {
           invoiceId = candidate;
           break;
         }
@@ -78,7 +217,7 @@ async function routes(fastify) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
 
       await col().insertOne({
-        labId: 123456,
+        labId,
         invoiceId,
         createdAt: Date.now(),
         patient: {
@@ -87,7 +226,7 @@ async function routes(fastify) {
           age: Number(patient.age),
           contactNumber: patient.contactNumber,
         },
-        referrer,
+        referrer: referrer ?? { id: null, name: null, type: null },
         tests: tests.map((t) => ({
           testId: new ObjectId(t.testId),
           name: t.name,
@@ -123,7 +262,7 @@ async function routes(fastify) {
     try {
       const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
       const filter = {
-        isDeleted: { $ne: true },
+        isDeleted: false,
         ...buildCursorFilter({ cursor, startDate, endDate }),
       };
       const result = await col()
@@ -159,7 +298,7 @@ async function routes(fastify) {
   });
 
   // ── GET /invoice/:invoiceId ───────────────────────────────────────────────
-  fastify.get("/invoice/:invoiceId", async (req, reply) => {
+  fastify.get("/invoice/:invoiceId", invoiceIdSchema, async (req, reply) => {
     try {
       const invoice = await col().findOne({ invoiceId: req.params.invoiceId });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
@@ -171,10 +310,7 @@ async function routes(fastify) {
   });
 
   // ── GET /invoice/:invoiceId/report-summary ────────────────────────────────
-  // Lean endpoint for the Reports page. Returns only what the UI needs:
-  // patient info, invoice header, amounts, and per-test status + dates.
-  // No report body, no referrer, no schema details.
-  fastify.get("/invoice/:invoiceId/report-summary", async (req, reply) => {
+  fastify.get("/invoice/:invoiceId/report-summary", invoiceIdSchema, async (req, reply) => {
     try {
       const invoice = await col().findOne(
         { invoiceId: req.params.invoiceId },
@@ -190,7 +326,6 @@ async function routes(fastify) {
             "amount.initial": 1,
             "amount.final": 1,
             "amount.paid": 1,
-            // Per test: only identity + status + dates. No report body.
             "tests.testId": 1,
             "tests.name": 1,
             "tests.price": 1,
@@ -201,7 +336,6 @@ async function routes(fastify) {
           },
         },
       );
-
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       return reply.send(invoice);
     } catch (err) {
@@ -211,17 +345,13 @@ async function routes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/patient-info ────────────────────────────────
-  fastify.patch("/invoice/:invoiceId/patient-info", async (req, reply) => {
+  fastify.patch("/invoice/:invoiceId/patient-info", invoiceIdWithPatientInfoSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
       const { patient } = req.body;
 
-      if (!patient?.name || !patient?.gender || !patient?.age || !patient?.contactNumber)
-        return reply.code(400).send({
-          error: "patient.name, patient.gender, patient.age, and patient.contactNumber are all required",
-        });
-
-      if (!(await col().findOne({ invoiceId }))) return reply.code(404).send({ error: "Invoice not found" });
+      if (!(await col().findOne({ invoiceId }, { projection: { _id: 1 } })))
+        return reply.code(404).send({ error: "Invoice not found" });
 
       const update = {
         patient: {
@@ -241,10 +371,10 @@ async function routes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/collect-due ─────────────────────────────────
-  fastify.patch("/invoice/:invoiceId/collect-due", async (req, reply) => {
+  fastify.patch("/invoice/:invoiceId/collect-due", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId }, { projection: { "amount.final": 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
       const result = await col().updateOne({ invoiceId }, { $set: { "amount.paid": invoice.amount.final } });
@@ -258,10 +388,10 @@ async function routes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/mark-delivered ──────────────────────────────
-  fastify.patch("/invoice/:invoiceId/mark-delivered", async (req, reply) => {
+  fastify.patch("/invoice/:invoiceId/mark-delivered", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId }, { projection: { isDelivered: 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDelivered) return reply.code(400).send({ error: "Invoice is already marked as delivered" });
 
@@ -274,10 +404,10 @@ async function routes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/delete — soft delete ────────────────────────
-  fastify.patch("/invoice/:invoiceId/delete", async (req, reply) => {
+  fastify.patch("/invoice/:invoiceId/delete", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId });
+      const invoice = await col().findOne({ invoiceId }, { projection: { isDeleted: 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDeleted) return reply.code(400).send({ error: "Invoice is already deleted" });
 

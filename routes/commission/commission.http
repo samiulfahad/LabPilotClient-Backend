@@ -1,0 +1,34 @@
+@baseUrl = http://localhost:5000/api/v1
+@contentType = application/json
+
+# ==============================================================================
+# COMMISSION
+# ==============================================================================
+
+### GET commission summary (custom date range)
+GET {{baseUrl}}/commission/summary?startDate=1773000000000&endDate=1773999999999
+Content-Type: {{contentType}}
+
+###
+
+### GET commission summary (today)
+GET {{baseUrl}}/commission/summary?startDate=1773744000000&endDate=1773830399999
+Content-Type: {{contentType}}
+
+###
+
+### GET commission summary (missing startDate — expect 400)
+GET {{baseUrl}}/commission/summary?endDate=1773999999999
+Content-Type: {{contentType}}
+
+###
+
+### GET commission summary (missing endDate — expect 400)
+GET {{baseUrl}}/commission/summary?startDate=1773000000000
+Content-Type: {{contentType}}
+
+###
+
+### GET commission summary (startDate > endDate — expect 400)
+GET {{baseUrl}}/commission/summary?startDate=1773999999999&endDate=1773000000000
+Content-Type: {{contentType}}

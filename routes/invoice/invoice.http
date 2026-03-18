@@ -9,20 +9,22 @@
 GET {{baseUrl}}/invoice/required-data
 Content-Type: {{contentType}}
 
+###
+
 ### POST create invoice
 POST {{baseUrl}}/invoice/add
 Content-Type: {{contentType}}
 
 {
-  "patientName": "John Doe",
-  "gender": "male",
-  "age": "28",
-  "contactNumber": "01712345678",
+  "patient": {
+    "name": "John Doe",
+    "gender": "male",
+    "age": 28,
+    "contactNumber": "01712345678"
+  },
   "referrer": {
     "id": "69b002efa94903cfac8249c9",
-    "name": "Dr. Smith",
-    "discount": 50,
-    "commission": 50,
+    "name": "Dr. Smith ( MBBS )",
     "type": "doctor"
   },
   "tests": [
@@ -33,93 +35,126 @@ Content-Type: {{contentType}}
       "schemaId": "69a70bcd2c76412ea1978d18"
     }
   ],
-  "totalAmount": 300,
-  "priceAfterReferrerDiscount": 250,
-  "labAdjustmentAmount": 0,
-  "finalPrice": 250,
-  "paidAmount": 100
+  "amount": {
+    "initial": 300,
+    "referrerDiscount": 50,
+    "referrerCommission": 50,
+    "labAdjustment": 0,
+    "final": 250,
+    "net": 200,
+    "paid": 100
+  }
 }
+
+###
+
+### POST create invoice (no referrer)
+POST {{baseUrl}}/invoice/add
+Content-Type: {{contentType}}
+
+{
+  "patient": {
+    "name": "Jane Doe",
+    "gender": "female",
+    "age": 25,
+    "contactNumber": "01798765432"
+  },
+  "tests": [
+    {
+      "testId": "69a8283e28af4c26b437f60d",
+      "name": "CBC",
+      "price": 300,
+      "schemaId": "69a70bcd2c76412ea1978d18"
+    },
+    {
+      "testId": "69a70b992c76412ea1978d17",
+      "name": "RBS",
+      "price": 200,
+      "schemaId": null
+    }
+  ],
+  "amount": {
+    "initial": 500,
+    "referrerDiscount": 0,
+    "referrerCommission": 0,
+    "labAdjustment": 0,
+    "final": 500,
+    "net": 500,
+    "paid": 500
+  }
+}
+
+###
 
 ### GET all invoices (paginated)
 GET {{baseUrl}}/invoice/all?limit=20
 Content-Type: {{contentType}}
 
+###
+
 ### GET all invoices (with date range)
 GET {{baseUrl}}/invoice/all?startDate=1773000000000&endDate=1773999999999&limit=20
 Content-Type: {{contentType}}
 
-### GET single invoice by invoiceId
-GET {{baseUrl}}/invoice/AZP7328
+###
+
+### GET all invoices (with cursor for next page)
+GET {{baseUrl}}/invoice/all?limit=20&cursor=1773816911298
 Content-Type: {{contentType}}
 
-### PATCH update patient info
-PATCH {{baseUrl}}/invoice/AZP7328/patient-info
-Content-Type: {{contentType}}
-
-{
-  "patientName": "Jane Doe",
-  "gender": "female",
-  "age": "25",
-  "contactNumber": "01798765432"
-}
-
-### PATCH collect due amount
-PATCH {{baseUrl}}/invoice/AZP7328/collect-due
-Content-Type: {{contentType}}
-
-### PATCH mark as delivered
-PATCH {{baseUrl}}/invoice/AZP7328/mark-delivered
-Content-Type: {{contentType}}
-
-### PATCH soft delete invoice
-PATCH {{baseUrl}}/invoice/AZP7328/delete
-Content-Type: {{contentType}}
+###
 
 ### GET deleted invoices (paginated)
 GET {{baseUrl}}/invoice/deleted?limit=20
 Content-Type: {{contentType}}
 
-# ==============================================================================
-# TESTS
-# ==============================================================================
+###
 
-### GET all test categories
-GET {{baseUrl}}/test/categories
+### GET deleted invoices (with date range)
+GET {{baseUrl}}/invoice/deleted?startDate=1773000000000&endDate=1773999999999&limit=20
 Content-Type: {{contentType}}
 
-### GET full test catalog
-GET {{baseUrl}}/test/catalog
+###
+
+### GET single invoice by invoiceId
+GET {{baseUrl}}/invoice/BAQ6318
 Content-Type: {{contentType}}
 
-### GET single test by testId
-GET {{baseUrl}}/test/693d9f18a2469caf76ab7826
+###
+
+### GET invoice report summary
+GET {{baseUrl}}/invoice/BAQ6318/report-summary
 Content-Type: {{contentType}}
 
-### GET active schema by testId
-GET {{baseUrl}}/test/schema/693d9f18a2469caf76ab7826
-Content-Type: {{contentType}}
+###
 
-### POST create test
-POST {{baseUrl}}/test
-Content-Type: {{contentType}}
-
-{
-  "name": "Complete Blood Count",
-  "testId": "693d9f18a2469caf76ab7826",
-  "categoryId": "693d9f18a2469caf76ab7825",
-  "schemaId": "69498dad079c05581bbcbd4b",
-  "price": 500
-}
-
-### PATCH update test
-PATCH {{baseUrl}}/test/6959379448008ead67c37841
+### PATCH update patient info
+PATCH {{baseUrl}}/invoice/BAQ6318/patient-info
 Content-Type: {{contentType}}
 
 {
-  "price": 600,
-  "schemaId": "69498dad079c05581bbcbd4b"
+  "patient": {
+    "name": "Jane Doe",
+    "gender": "female",
+    "age": 25,
+    "contactNumber": "01798765432"
+  }
 }
 
-### DELETE test (hard delete)
-DELETE {{baseUrl}}/test/693d9f18a2469caf76ab7826
+###
+
+### PATCH collect due amount
+PATCH {{baseUrl}}/invoice/BAQ6318/collect-due
+Content-Type: {{contentType}}
+
+###
+
+### PATCH mark as delivered
+PATCH {{baseUrl}}/invoice/BAQ6318/mark-delivered
+Content-Type: {{contentType}}
+
+###
+
+### PATCH soft delete invoice
+PATCH {{baseUrl}}/invoice/BAQ6318/delete
 Content-Type: {{contentType}}
