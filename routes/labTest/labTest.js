@@ -5,17 +5,11 @@ const collectionName = "myTestList";
 async function routes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
 
-  // Helper to convert _id to string
-  const toClientFormat = (doc) => {
-    if (!doc) return null;
-    return { ...doc, _id: doc._id.toString() };
-  };
-
   // GET all tests
   fastify.get("/test/all", async (req, reply) => {
     try {
       const tests = await collection.find({}).sort({ createdAt: -1 }).toArray();
-      return tests.map(toClientFormat);
+      return tests;
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch tests" });
@@ -37,7 +31,7 @@ async function routes(fastify, options) {
         return reply.code(404).send({ error: "Test not found" });
       }
 
-      return toClientFormat(test);
+      return test;
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to fetch test" });
@@ -76,14 +70,12 @@ async function routes(fastify, options) {
         categoryId: categoryId || null,
         schemaId: schemaId || null,
         price: parseFloat(price) || 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
       };
 
       const result = await collection.insertOne(newTest);
 
       return reply.code(201).send({
-        _id: result.insertedId.toString(),
+        _id: result.insertedId,
         ...newTest,
       });
     } catch (error) {
@@ -132,7 +124,7 @@ async function routes(fastify, options) {
       }
 
       const updated = await collection.findOne({ testId: testId });
-      return toClientFormat(updated);
+      return updated;
     } catch (error) {
       req.log.error(error);
       return reply.code(500).send({ error: "Failed to update test" });
@@ -171,7 +163,7 @@ async function routes(fastify, options) {
     }
   });
 
-  // GET All Test Categories
+  // GET All Test Catalog
   fastify.get("/test/catalog", async (req, reply) => {
     try {
       const list = await fastify.mongo.db.collection("testCatalog").find({}).toArray();
@@ -197,11 +189,14 @@ async function routes(fastify, options) {
     }
   });
 
-   // GET Schema by schemaId
+  // GET Schema by schemaId
   fastify.get("/schema/:schemaId", async (req, reply) => {
     try {
       const { schemaId } = req.params;
-      console.log(schemaId);
+      // console.log(schemaId);
+      if (!ObjectId.isValid(schemaId)) {
+        return reply.code(400).send({ error: "Invalid schema ID format" });
+      }
       const schemasCollection = fastify.mongo.db.collection("testSchema");
 
       const schema = await schemasCollection.findOne({ _id: new ObjectId(schemaId) });

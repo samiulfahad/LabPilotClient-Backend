@@ -2,244 +2,176 @@ import { ObjectId } from "mongodb";
 
 const collectionName = "staff";
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const staffBodySchema = {
+  type: "object",
+  required: ["name", "username", "email", "mobileNumber", "permissions"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 100 },
+    username: { type: "string", minLength: 3, maxLength: 30 },
+    email: { type: "string", minLength: 5, maxLength: 254 },
+    mobileNumber: { type: "string", minLength: 10, maxLength: 15 },
+    permissions: {
+      type: "object",
+      properties: {
+        createInvoice: { type: "boolean" },
+        editInvoice: { type: "boolean" },
+        deleteInvoice: { type: "boolean" },
+        cashmemo: { type: "boolean" },
+        uploadReport: { type: "boolean" },
+        downloadReport: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    isActive: { type: "boolean" },
+  },
+  additionalProperties: true,
+};
+
+const isValidObjectId = (id) => ObjectId.isValid(id) && String(new ObjectId(id)) === id;
+
+const normalizePermissions = (perms = {}) => ({
+  createInvoice: perms.createInvoice ?? false,
+  editInvoice: perms.editInvoice ?? false,
+  deleteInvoice: perms.deleteInvoice ?? false,
+  cashmemo: perms.cashmemo ?? false,
+  uploadReport: perms.uploadReport ?? false,
+  downloadReport: perms.downloadReport ?? false,
+});
+
 async function routes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
 
-  // Helper to convert _id to string
-  const toClientFormat = (doc) => {
-    if (!doc) return null;
-    return { ...doc, _id: doc._id.toString() };
+  const checkDuplicate = async (field, value, excludeId = null) => {
+    const query = { [field]: value };
+    if (excludeId) query._id = { $ne: new ObjectId(excludeId) };
+    return collection.findOne(query, { projection: { _id: 1 } });
   };
 
   // GET all staff
   fastify.get("/staffs", async (req, reply) => {
-    const staff = await collection
-      .find(
-        {},
-        {
-          projection: {
-            name: 1,
-            username: 1,
-            email: 1,
-            mobileNumber: 1,
-            permissions: 1,
-            isActive: 1,
-          },
-        },
-      )
-      .sort({ createdAt: -1 })
+    return collection
+      .find({}, { projection: { name: 1, username: 1, email: 1, mobileNumber: 1, permissions: 1, isActive: 1 } })
+      .sort({ name: 1 })
       .toArray();
-
-    return staff.map(toClientFormat);
   });
 
-  // GET single staff member
+  // GET single staff
   fastify.get("/staff/:id", async (req, reply) => {
-    const { id } = req.params;
-    const staffMember = await collection.findOne({ _id: new ObjectId(id) });
-
-    if (!staffMember) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
+    if (!isValidObjectId(req.params.id)) {
+      return reply.code(400).send({ error: "Invalid staff ID" });
     }
-
-    return toClientFormat(staffMember);
+    const staffMember = await collection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!staffMember) return reply.code(404).send({ error: "Staff not found" });
+    return staffMember;
   });
 
   // POST - Create Staff
-  fastify.post("/staff/add", async (req, reply) => {
-    const { type, _id, ...data } = req.body; // remove frontend-only fields
+  fastify.post("/staff/add", { schema: { body: staffBodySchema } }, async (req, reply) => {
+    const { type, _id, ...data } = req.body;
 
-    // Validation
-    if (!data.name?.trim()) {
-      return reply.code(400).send({ error: "Name is required" });
-    }
-    if (!data.username?.trim()) {
-      return reply.code(400).send({ error: "Username is required" });
-    }
-    if (!data.email?.trim()) {
-      return reply.code(400).send({ error: "Email is required" });
-    }
-    if (!data.mobileNumber?.trim()) {
-      return reply.code(400).send({ error: "Mobile number is required" });
-    }
+    const email = data.email.toLowerCase().trim();
+    const username = data.username.toLowerCase().trim();
+    const mobile = data.mobileNumber.trim();
+    const name = data.name.trim();
 
-    // Email validation (basic)
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(data.email.trim())) {
+    if (!EMAIL_REGEX.test(email)) {
       return reply.code(400).send({ error: "Invalid email format" });
     }
-
-    // Check if username already exists
-    const existingUsername = await collection.findOne({ username: data.username.toLowerCase().trim() });
-    if (existingUsername) {
+    if (await checkDuplicate("username", username)) {
       return reply.code(400).send({ error: "Username already exists" });
     }
-
-    // Check if email already exists
-    const existingEmail = await collection.findOne({ email: data.email.toLowerCase().trim() });
-    if (existingEmail) {
+    if (await checkDuplicate("email", email)) {
       return reply.code(400).send({ error: "Email already exists" });
     }
-
-    // Check if mobile number already exists
-    const existingMobile = await collection.findOne({ mobileNumber: data.mobileNumber.trim() });
-    if (existingMobile) {
+    if (await checkDuplicate("mobileNumber", mobile)) {
       return reply.code(400).send({ error: "Mobile number already exists" });
     }
 
-    // Ensure permissions object exists with all fields
-    const permissions = {
-      createInvoice: data.permissions?.createInvoice ?? false,
-      editInvoice: data.permissions?.editInvoice ?? false,
-      deleteInvoice: data.permissions?.deleteInvoice ?? false,
-      cashmemo: data.permissions?.cashmemo ?? false,
-      uploadReport: data.permissions?.uploadReport ?? false,
-    };
-
-    const newStaff = {
-      name: data.name.trim(),
-      username: data.username.toLowerCase().trim(),
-      email: data.email.toLowerCase().trim(),
-      mobileNumber: data.mobileNumber.trim(),
-      permissions,
+    const result = await collection.insertOne({
+      name,
+      username,
+      email,
+      mobileNumber: mobile,
+      permissions: normalizePermissions(data.permissions),
       isActive: data.isActive ?? true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    });
 
-    const result = await collection.insertOne(newStaff);
-    reply.code(201).send({ _id: result.insertedId });
+    return reply.code(201).send({ _id: result.insertedId });
   });
 
   // PUT - Update Staff
-  fastify.put("/staff/edit/:id", async (req, reply) => {
+  fastify.put("/staff/edit/:id", { schema: { body: { ...staffBodySchema, required: [] } } }, async (req, reply) => {
+    if (!isValidObjectId(req.params.id)) {
+      return reply.code(400).send({ error: "Invalid staff ID" });
+    }
+
     const { id } = req.params;
     const { type, _id, ...data } = req.body;
 
-    // Email validation if email is being updated
-    if (data.email) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(data.email.trim())) {
+    const email = data.email?.toLowerCase().trim();
+    const username = data.username?.toLowerCase().trim();
+    const mobile = data.mobileNumber?.trim();
+    const name = data.name?.trim();
+
+    if (email) {
+      if (!EMAIL_REGEX.test(email)) {
         return reply.code(400).send({ error: "Invalid email format" });
       }
-    }
-
-    // Check if username is taken by another staff member
-    if (data.username) {
-      const existingUsername = await collection.findOne({
-        username: data.username.toLowerCase().trim(),
-        _id: { $ne: new ObjectId(id) },
-      });
-      if (existingUsername) {
-        return reply.code(400).send({ error: "Username already exists" });
-      }
-    }
-
-    // Check if email is taken by another staff member
-    if (data.email) {
-      const existingEmail = await collection.findOne({
-        email: data.email.toLowerCase().trim(),
-        _id: { $ne: new ObjectId(id) },
-      });
-      if (existingEmail) {
+      if (await checkDuplicate("email", email, id)) {
         return reply.code(400).send({ error: "Email already exists" });
       }
     }
-
-    // Check if mobile number is taken by another staff member
-    if (data.mobileNumber) {
-      const existingMobile = await collection.findOne({
-        mobileNumber: data.mobileNumber.trim(),
-        _id: { $ne: new ObjectId(id) },
-      });
-      if (existingMobile) {
-        return reply.code(400).send({ error: "Mobile number already exists" });
-      }
+    if (username && (await checkDuplicate("username", username, id))) {
+      return reply.code(400).send({ error: "Username already exists" });
     }
-
-    // Ensure permissions object exists with all fields
-    const permissions = {
-      createInvoice: data.permissions?.createInvoice ?? false,
-      editInvoice: data.permissions?.editInvoice ?? false,
-      deleteInvoice: data.permissions?.deleteInvoice ?? false,
-      cashmemo: data.permissions?.cashmemo ?? false,
-      uploadReport: data.permissions?.uploadReport ?? false,
-    };
+    if (mobile && (await checkDuplicate("mobileNumber", mobile, id))) {
+      return reply.code(400).send({ error: "Mobile number already exists" });
+    }
 
     const updateData = {
-      name: data.name?.trim(),
-      username: data.username?.toLowerCase().trim(),
-      email: data.email?.toLowerCase().trim(),
-      mobileNumber: data.mobileNumber?.trim(),
-      permissions,
-      isActive: data.isActive,
-      updatedAt: new Date(),
+      ...(name && { name }),
+      ...(username && { username }),
+      ...(email && { email }),
+      ...(mobile && { mobileNumber: mobile }),
+      ...(data.permissions && { permissions: normalizePermissions(data.permissions) }),
+      ...(data.isActive !== undefined && { isActive: data.isActive }),
     };
 
-    // Remove undefined values
-    Object.keys(updateData).forEach((key) => {
-      if (updateData[key] === undefined) {
-        delete updateData[key];
-      }
-    });
-
     const result = await collection.updateOne({ _id: new ObjectId(id) }, { $set: updateData });
+    if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
 
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
-    }
-
-    const updated = await collection.findOne({ _id: new ObjectId(id) });
-    return toClientFormat(updated);
+    return { message: "Staff updated successfully" };
   });
 
-  // PATCH - Deactivate Staff
+  // PATCH - Deactivate
   fastify.patch("/staff/:id/deactivate", async (req, reply) => {
-    const { id } = req.params;
-
-    const result = await collection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { isActive: false, updatedAt: new Date() } },
-    );
-
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
+    if (!isValidObjectId(req.params.id)) {
+      return reply.code(400).send({ error: "Invalid staff ID" });
     }
-
-    return { message: "Staff deactivated successfully", _id: id };
+    const result = await collection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { isActive: false } });
+    if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+    return { message: "Staff deactivated successfully", _id: req.params.id };
   });
 
-  // PATCH - Activate Staff
+  // PATCH - Activate
   fastify.patch("/staff/:id/activate", async (req, reply) => {
-    const { id } = req.params;
-
-    const result = await collection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { isActive: true, updatedAt: new Date() } },
-    );
-
-    if (result.matchedCount === 0) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
+    if (!isValidObjectId(req.params.id)) {
+      return reply.code(400).send({ error: "Invalid staff ID" });
     }
-
-    return { message: "Staff activated successfully", _id: id };
+    const result = await collection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { isActive: true } });
+    if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+    return { message: "Staff activated successfully", _id: req.params.id };
   });
 
-  // DELETE - Hard Delete
+  // DELETE
   fastify.delete("/staff/:id", async (req, reply) => {
-    const { id } = req.params;
-
-    const result = await collection.deleteOne({ _id: new ObjectId(id) });
-
-    if (result.deletedCount === 0) {
-      reply.code(404).send({ error: "Staff not found" });
-      return;
+    if (!isValidObjectId(req.params.id)) {
+      return reply.code(400).send({ error: "Invalid staff ID" });
     }
-
+    const result = await collection.deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) return reply.code(404).send({ error: "Staff not found" });
     return { message: "Staff deleted successfully" };
   });
 }

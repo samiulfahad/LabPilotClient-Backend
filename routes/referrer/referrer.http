@@ -2,51 +2,51 @@
 ### Base URL
 @baseUrl = http://localhost:5000/api/v1
 @contentType = application/json
+@referrerId = 698c432ab24c050d9011686f
 
 ### 1. GET All Referrers
 GET {{baseUrl}}/referrers
 Content-Type: {{contentType}}
 
-### 2. CREATE New Referrer
-POST {{baseUrl}}/referrers
+### 2. GET Single Referrer
+GET {{baseUrl}}/referrer/{{referrerId}}
+Content-Type: {{contentType}}
+
+### 3. CREATE New Referrer
+POST {{baseUrl}}/referrer/add
 Content-Type: {{contentType}}
 
 {
-  "name": "Dr. Ahmed Khan 2",
-  "contactNumber": "+8801712345678",
+  "name": "Dr. Ahmed Khan",
+  "contactNumber": "01712345678",
   "degree": "MBBS, FCPS (Medicine)",
   "details": "Senior Consultant at United Hospital",
-  "isDoctor": true,
+  "type": "doctor",
   "commissionType": "percentage",
   "commissionValue": 15,
   "isActive": true
 }
 
-### 3. GET Single Referrer
-GET {{baseUrl}}/referrers/698c432ab24c050d9011686f
-Content-Type: {{contentType}}
-
 ### 4. UPDATE Referrer
-PUT {{baseUrl}}/referrers/698c432ab24c050d9011686f
+PUT {{baseUrl}}/referrer/edit/{{referrerId}}
 Content-Type: {{contentType}}
 
 {
   "name": "Dr. Ahmed Khan",
-  "contactNumber": "+8801712345678",
+  "contactNumber": "01712345678",
   "degree": "MBBS, FCPS (Medicine), MD",
   "details": "Senior Consultant at United Hospital - Updated",
-  "isDoctor": true,
+  "type": "doctor",
   "commissionType": "percentage",
   "commissionValue": 18,
   "isActive": true
 }
 
 ### 5. DEACTIVATE Referrer
-PATCH {{baseUrl}}/referrers/698c432ab24c050d9011686f/deactivate
+PATCH {{baseUrl}}/referrer/{{referrerId}}/deactivate
 
 ### 6. ACTIVATE Referrer
-PATCH {{baseUrl}}/referrers/698c432ab24c050d9011686f/deactivate
+PATCH {{baseUrl}}/referrer/{{referrerId}}/activate
 
-### 7. DELETE Referrer (Hard Delete)
-DELETE {{baseUrl}}/referrers/698c432ab24c050d9011686f
-Content-Type: {{contentType}}
+### 7. DELETE Referrer
+DELETE {{baseUrl}}/referrer/{{referrerId}}
