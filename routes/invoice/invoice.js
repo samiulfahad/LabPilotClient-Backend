@@ -76,8 +76,6 @@ const addInvoiceSchema = {
             contactNumber: { type: "string", minLength: 1, maxLength: 15 },
           },
         },
-
-        // referrer is optional — patient may not have one
         referrer: {
           type: "object",
           additionalProperties: false,
@@ -87,7 +85,6 @@ const addInvoiceSchema = {
             type: { type: ["string", "null"], maxLength: 50 },
           },
         },
-
         tests: {
           type: "array",
           minItems: 1,
@@ -104,7 +101,6 @@ const addInvoiceSchema = {
             },
           },
         },
-
         amount: {
           type: "object",
           required: ["initial", "referrerDiscount", "referrerCommission", "labAdjustment", "final", "net", "paid"],
@@ -158,18 +154,6 @@ const invoiceIdWithPatientInfoSchema = {
 async function routes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
 
-  // Compound index: labId (equality) → createdAt (range) → isDeleted (filter)
-  try {
-    await fastify.mongo.db
-      .collection("invoices")
-      .createIndex(
-        { labId: 1, createdAt: -1, isDeleted: 1 },
-        { name: "idx_labId_createdAt_isDeleted", background: true },
-      );
-  } catch (err) {
-    fastify.log.warn({ err }, "invoice: could not ensure index");
-  }
-
   // ── GET /invoice/required-data ────────────────────────────────────────────
   fastify.get("/invoice/required-data", async (req, reply) => {
     try {
@@ -199,11 +183,8 @@ async function routes(fastify) {
   fastify.post("/invoice/add", addInvoiceSchema, async (req, reply) => {
     try {
       const { patient, referrer, tests, amount } = req.body;
+      const labId = 123456; // TODO: req.user.labId
 
-      // TODO: replace with req.user.labId from auth context
-      const labId = 123456;
-
-      // Generate unique invoice ID (max 5 attempts)
       let invoiceId;
       for (let i = 0; i < 5; i++) {
         const candidate = generateInvoiceId();
@@ -257,30 +238,29 @@ async function routes(fastify) {
     }
   });
 
-  // ── GET /invoice/all — paginated + optional date-range ────────────────────
+  // ── GET /invoice/all ──────────────────────────────────────────────────────
   fastify.get("/invoice/all", async (req, reply) => {
     try {
       const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
-      const filter = {
-        isDeleted: false,
-        ...buildCursorFilter({ cursor, startDate, endDate }),
-      };
       const result = await col()
-        .find(filter, {
-          projection: {
-            _id: 1,
-            invoiceId: 1,
-            createdAt: 1,
-            isDelivered: 1,
-            "patient.name": 1,
-            "patient.gender": 1,
-            "patient.age": 1,
-            "patient.contactNumber": 1,
-            "amount.final": 1,
-            "amount.paid": 1,
-            "tests.schemaId": 1,
+        .find(
+          { isDeleted: false, ...buildCursorFilter({ cursor, startDate, endDate }) },
+          {
+            projection: {
+              _id: 1,
+              invoiceId: 1,
+              createdAt: 1,
+              isDelivered: 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "tests.schemaId": 1,
+            },
           },
-        })
+        )
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .toArray();
@@ -291,30 +271,29 @@ async function routes(fastify) {
     }
   });
 
-  // ── GET /invoice/deleted — paginated + optional date-range ────────────────
+  // ── GET /invoice/deleted ──────────────────────────────────────────────────
   fastify.get("/invoice/deleted", async (req, reply) => {
     try {
       const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
-      const filter = {
-        isDeleted: true,
-        ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }),
-      };
       const result = await col()
-        .find(filter, {
-          projection: {
-            _id: 1,
-            invoiceId: 1,
-            createdAt: 1,
-            deletedAt: 1,
-            "patient.name": 1,
-            "patient.gender": 1,
-            "patient.age": 1,
-            "patient.contactNumber": 1,
-            "amount.final": 1,
-            "amount.paid": 1,
-            "tests.schemaId": 1,
+        .find(
+          { isDeleted: true, ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }) },
+          {
+            projection: {
+              _id: 1,
+              invoiceId: 1,
+              createdAt: 1,
+              deletedAt: 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "tests.schemaId": 1,
+            },
           },
-        })
+        )
         .sort({ deletedAt: -1 })
         .limit(limit + 1)
         .toArray();
@@ -431,7 +410,7 @@ async function routes(fastify) {
     }
   });
 
-  // ── PATCH /invoice/:invoiceId/delete — soft delete ────────────────────────
+  // ── PATCH /invoice/:invoiceId/delete ──────────────────────────────────────
   fastify.patch("/invoice/:invoiceId/delete", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;

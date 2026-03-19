@@ -14,47 +14,27 @@ const summaryQuerySchema = {
 };
 
 async function routes(fastify) {
-  // Compound index: labId (equality) → createdAt (range) → isDeleted (filter)
-  try {
-    await fastify.mongo.db
-      .collection("invoices")
-      .createIndex(
-        { labId: 1, createdAt: -1, isDeleted: 1 },
-        { name: "idx_labId_createdAt_isDeleted", background: true },
-      );
-  } catch (err) {
-    fastify.log.warn({ err }, "cashmemo: could not ensure index");
-  }
-
   // ── GET /cashmemo/summary ─────────────────────────────────────────────────
-  // Query params: startDate {number} Unix ms, endDate {number} Unix ms
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
     const { startDate, endDate } = req.query;
 
     if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-    // TODO: replace with req.user.labId from auth context once multi-tenancy is wired up
-    const labId = 123456;
+    const labId = 123456; // TODO: req.user.labId
 
     try {
       const [result] = await fastify.mongo.db
         .collection("invoices")
         .aggregate(
           [
-            // ── Stage 1: index-backed match ──────────────────────────────────
-            // isDeleted omitted here intentionally — $facet needs both true and
-            // false docs. Full index still used via labId + createdAt.
             {
               $match: {
                 labId,
                 createdAt: { $gte: startDate, $lte: endDate },
               },
             },
-
-            // ── Stage 2: three parallel branches via $facet ──────────────────
             {
               $facet: {
-                // Branch A: financial + operational summary (active only)
                 active: [
                   { $match: { isDeleted: false } },
                   {
@@ -87,18 +67,13 @@ async function routes(fastify) {
                       totalFinal: 1,
                       totalNet: 1,
                       totalPaid: 1,
-                      // totalDue derived here in pipeline — avoids JS post-processing
                       totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
                       deliveredCount: 1,
                       fullyPaidCount: 1,
                     },
                   },
                 ],
-
-                // Branch B: soft-deleted count
                 deleted: [{ $match: { isDeleted: true } }, { $count: "deletedCount" }],
-
-                // Branch C: test frequency ranking (active only, capped at 20)
                 testCounts: [
                   { $match: { isDeleted: false } },
                   { $unwind: "$tests" },

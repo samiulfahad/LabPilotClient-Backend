@@ -4,6 +4,8 @@ import mongodb from "@fastify/mongodb";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import dotenv from "dotenv";
+
+import { ensureIndexes } from "./db/indexes.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
 import labTestRoutes from "./routes/labTest/labTest.js";
@@ -14,9 +16,9 @@ import commissionRoutes from "./routes/commission/commission.js";
 
 dotenv.config();
 
-const fastify = Fastify({ logger: false });
+const fastify = Fastify({ logger: true });
 
-// CORS
+// ── CORS ──────────────────────────────────────────────────────────────────────
 await fastify.register(cors, {
   origin: [
     "https://sfahad.netlify.app",
@@ -27,60 +29,61 @@ await fastify.register(cors, {
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
 });
 
-// MongoDB
+// ── MongoDB ───────────────────────────────────────────────────────────────────
 await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
 
-// Swagger / OpenAPI
+// ── Indexes ───────────────────────────────────────────────────────────────────
+try {
+  await ensureIndexes(fastify.mongo.db);
+  fastify.log.info("DB indexes ensured");
+} catch (err) {
+  fastify.log.error({ err }, "Could not ensure DB indexes — aborting");
+  process.exit(1);
+}
+
+// ── Swagger ───────────────────────────────────────────────────────────────────
 await fastify.register(swagger, {
   openapi: {
     info: {
-      title: "Referrer Management API",
-      description: "REST API for managing medical referrers (doctors, agents, etc.)",
+      title: "LabPilot API",
+      description: "REST API for LabPilot Pro",
       version: "1.0.0",
-      contact: {
-        name: "Your Name",
-        email: "you@example.com",
-      },
     },
-    servers: [{ url: `http://localhost:${process.env.PORT || 5000}`, description: "Development server" }],
-    tags: [{ name: "Referrers", description: "Referrer management endpoints" }],
+    servers: [
+      {
+        url: `http://localhost:${process.env.PORT || 5000}`,
+        description: "Development server",
+      },
+    ],
   },
 });
 
 await fastify.register(swaggerUi, {
   routePrefix: "/docs",
-  uiConfig: {
-    docExpansion: "list",
-    deepLinking: true,
-    defaultModelsExpandDepth: 1,
-  },
+  uiConfig: { docExpansion: "list", deepLinking: true },
   staticCSP: true,
 });
 
-// Routes
-fastify.register(cashmemoRoutes, { prefix: "/api/v1" });
-fastify.register(commissionRoutes, { prefix: "/api/v1" });
-fastify.register(referrerRoutes, { prefix: "/api/v1" });
-fastify.register(staffRoutes, { prefix: "/api/v1" });
-fastify.register(labTestRoutes, { prefix: "/api/v1" });
-fastify.register(invoiceRoutes, { prefix: "/api/v1" });
-fastify.register(reportRoutes, { prefix: "/api/v1" });
+// ── Routes ────────────────────────────────────────────────────────────────────
+const API = "/api/v1";
 
-const start = async () => {
-  try {
-    await fastify.listen({ port: process.env.PORT || 5000, host: "0.0.0.0" });
-    console.log(`🚀 Server running on http://localhost:${process.env.PORT || 5000}`);
-    console.log(`📘 Swagger UI available at http://localhost:${process.env.PORT || 5000}/docs`);
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
-};
+fastify.register(cashmemoRoutes, { prefix: API });
+fastify.register(commissionRoutes, { prefix: API });
+fastify.register(referrerRoutes, { prefix: API });
+fastify.register(staffRoutes, { prefix: API });
+fastify.register(labTestRoutes, { prefix: API });
+fastify.register(invoiceRoutes, { prefix: API });
+fastify.register(reportRoutes, { prefix: API });
 
-fastify.get("/", (req, res) => {
-  res.send("Ok");
-});
-start();
+fastify.get("/", (req, reply) => reply.send("Ok"));
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+try {
+  await fastify.listen({ port: process.env.PORT || 5000, host: "0.0.0.0" });
+} catch (err) {
+  fastify.log.error(err);
+  process.exit(1);
+}
