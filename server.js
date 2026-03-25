@@ -4,6 +4,7 @@ import mongodb from "@fastify/mongodb";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import dotenv from "dotenv";
+import fastifyCookie from "@fastify/cookie";
 
 import { ensureIndexes } from "./db/indexes.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
@@ -13,6 +14,7 @@ import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
 import commissionRoutes from "./routes/commission/commission.js";
+import authPlugin from "./plugins/auth.js";
 
 dotenv.config();
 
@@ -29,6 +31,7 @@ const fastify = Fastify({
 });
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
+// ── CORS ──────────────────────────────────────────────────────────────────────
 await fastify.register(cors, {
   origin: [
     "https://sfahad.netlify.app",
@@ -37,6 +40,7 @@ await fastify.register(cors, {
     "http://localhost:5174",
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  credentials: true, // <--- CRITICAL: Allows cookies to be sent/received
 });
 
 // ── MongoDB ───────────────────────────────────────────────────────────────────
@@ -53,6 +57,9 @@ try {
   fastify.log.error({ err }, "Could not ensure DB indexes — aborting");
   process.exit(1);
 }
+
+await fastify.register(fastifyCookie);
+await fastify.register(authPlugin);
 
 // ── Swagger ───────────────────────────────────────────────────────────────────
 await fastify.register(swagger, {
