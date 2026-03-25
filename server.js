@@ -7,6 +7,8 @@ import dotenv from "dotenv";
 import fastifyCookie from "@fastify/cookie";
 
 import { ensureIndexes } from "./db/indexes.js";
+import authPlugin from "./plugins/auth.js";
+import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
 import labTestRoutes from "./routes/labTest/labTest.js";
@@ -14,7 +16,6 @@ import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
 import commissionRoutes from "./routes/commission/commission.js";
-import authPlugin from "./plugins/auth.js";
 
 dotenv.config();
 
@@ -30,8 +31,6 @@ const fastify = Fastify({
   },
 });
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
-// ── CORS ──────────────────────────────────────────────────────────────────────
 await fastify.register(cors, {
   origin: [
     "https://sfahad.netlify.app",
@@ -40,16 +39,14 @@ await fastify.register(cors, {
     "http://localhost:5174",
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-  credentials: true, // <--- CRITICAL: Allows cookies to be sent/received
+  credentials: true,
 });
 
-// ── MongoDB ───────────────────────────────────────────────────────────────────
 await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
 
-// ── Indexes ───────────────────────────────────────────────────────────────────
 try {
   await ensureIndexes(fastify.mongo.db);
   fastify.log.info("DB indexes ensured");
@@ -60,6 +57,8 @@ try {
 
 await fastify.register(fastifyCookie);
 
+// ── Auth plugin first (hoists decorators to root scope) ───────────────────────
+await fastify.register(authPlugin);
 
 // ── Swagger ───────────────────────────────────────────────────────────────────
 await fastify.register(swagger, {
@@ -69,12 +68,7 @@ await fastify.register(swagger, {
       description: "REST API for LabPilot Pro",
       version: "1.0.0",
     },
-    servers: [
-      {
-        url: `http://localhost:${process.env.PORT || 5000}`,
-        description: "Development server",
-      },
-    ],
+    servers: [{ url: `http://localhost:${process.env.PORT || 5000}`, description: "Development server" }],
   },
 });
 
@@ -87,8 +81,7 @@ await fastify.register(swaggerUi, {
 // ── Routes ────────────────────────────────────────────────────────────────────
 const API = "/api/v1";
 
-await fastify.register(authPlugin, { prefix: API });
-
+fastify.register(authRoutes, { prefix: API });
 fastify.register(cashmemoRoutes, { prefix: API });
 fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
@@ -97,10 +90,8 @@ fastify.register(labTestRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 
-
 fastify.get("/", (req, reply) => reply.send("Ok"));
 
-// ── Start ─────────────────────────────────────────────────────────────────────
 try {
   await fastify.listen({ port: process.env.PORT || 5000, host: "0.0.0.0" });
 } catch (err) {

@@ -153,6 +153,14 @@ const invoiceIdWithPatientInfoSchema = {
 
 async function routes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
+  const labOId = (req) => new ObjectId(req.user.labOId);
+
+  // ── All routes in this plugin require authentication ──────────────────────
+  fastify.addHook("onRequest", fastify.authenticate);
+
+  // Permission-only hooks (authenticate already handled by the hook above)
+  const requireCreate = { onRequest: [fastify.authorize("createInvoice")] };
+  const requireDelete = { onRequest: [fastify.authorize("deleteInvoice")] };
 
   // ── GET /invoice/required-data ────────────────────────────────────────────
   fastify.get("/invoice/required-data", async (req, reply) => {
@@ -161,14 +169,14 @@ async function routes(fastify) {
         fastify.mongo.db
           .collection("referrers")
           .find(
-            { isActive: true },
+            { labOId: labOId(req), isActive: true },
             { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
           )
           .sort({ name: 1 })
           .toArray(),
         fastify.mongo.db
           .collection("myTestList")
-          .find({}, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
+          .find({ labOId: labOId(req) }, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
           .sort({ createdAt: -1 })
           .toArray(),
       ]);
@@ -180,10 +188,9 @@ async function routes(fastify) {
   });
 
   // ── POST /invoice/add ─────────────────────────────────────────────────────
-  fastify.post("/invoice/add", addInvoiceSchema, async (req, reply) => {
+  fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
       const { patient, referrer, tests, amount } = req.body;
-      const labId = 123456; // TODO: req.user.labId
 
       let invoiceId;
       for (let i = 0; i < 5; i++) {
@@ -198,7 +205,7 @@ async function routes(fastify) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
 
       await col().insertOne({
-        labId,
+        labOId: labOId(req),
         invoiceId,
         createdAt: Date.now(),
         patient: {
@@ -244,7 +251,11 @@ async function routes(fastify) {
       const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
       const result = await col()
         .find(
-          { isDeleted: false, ...buildCursorFilter({ cursor, startDate, endDate }) },
+          {
+            labOId: labOId(req),
+            isDeleted: false,
+            ...buildCursorFilter({ cursor, startDate, endDate }),
+          },
           {
             projection: {
               _id: 1,
@@ -277,7 +288,11 @@ async function routes(fastify) {
       const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
       const result = await col()
         .find(
-          { isDeleted: true, ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }) },
+          {
+            labOId: labOId(req),
+            isDeleted: true,
+            ...buildCursorFilter({ cursor, startDate, endDate, field: "deletedAt" }),
+          },
           {
             projection: {
               _id: 1,
@@ -307,7 +322,10 @@ async function routes(fastify) {
   // ── GET /invoice/:invoiceId ───────────────────────────────────────────────
   fastify.get("/invoice/:invoiceId", invoiceIdSchema, async (req, reply) => {
     try {
-      const invoice = await col().findOne({ invoiceId: req.params.invoiceId });
+      const invoice = await col().findOne({
+        invoiceId: req.params.invoiceId,
+        labOId: labOId(req),
+      });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       return reply.send(invoice);
     } catch (err) {
@@ -320,7 +338,10 @@ async function routes(fastify) {
   fastify.get("/invoice/:invoiceId/report-summary", invoiceIdSchema, async (req, reply) => {
     try {
       const invoice = await col().findOne(
-        { invoiceId: req.params.invoiceId },
+        {
+          invoiceId: req.params.invoiceId,
+          labOId: labOId(req),
+        },
         {
           projection: {
             _id: 0,
@@ -357,7 +378,7 @@ async function routes(fastify) {
       const { invoiceId } = req.params;
       const { patient } = req.body;
 
-      if (!(await col().findOne({ invoiceId }, { projection: { _id: 1 } })))
+      if (!(await col().findOne({ invoiceId, labOId: labOId(req) }, { projection: { _id: 1 } })))
         return reply.code(404).send({ error: "Invoice not found" });
 
       const update = {
@@ -369,7 +390,7 @@ async function routes(fastify) {
         },
       };
 
-      await col().updateOne({ invoiceId }, { $set: update });
+      await col().updateOne({ invoiceId, labOId: labOId(req) }, { $set: update });
       return reply.send({ success: true, ...update });
     } catch (err) {
       req.log.error(err);
@@ -381,10 +402,13 @@ async function routes(fastify) {
   fastify.patch("/invoice/:invoiceId/collect-due", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId }, { projection: { "amount.final": 1 } });
+      const invoice = await col().findOne({ invoiceId, labOId: labOId(req) }, { projection: { "amount.final": 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const result = await col().updateOne({ invoiceId }, { $set: { "amount.paid": invoice.amount.final } });
+      const result = await col().updateOne(
+        { invoiceId, labOId: labOId(req) },
+        { $set: { "amount.paid": invoice.amount.final } },
+      );
       if (result.modifiedCount === 0) return reply.code(400).send({ error: "Nothing to update" });
 
       return reply.send({ success: true, paid: invoice.amount.final });
@@ -398,11 +422,11 @@ async function routes(fastify) {
   fastify.patch("/invoice/:invoiceId/mark-delivered", invoiceIdSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId }, { projection: { isDelivered: 1 } });
+      const invoice = await col().findOne({ invoiceId, labOId: labOId(req) }, { projection: { isDelivered: 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDelivered) return reply.code(400).send({ error: "Invoice is already marked as delivered" });
 
-      await col().updateOne({ invoiceId }, { $set: { isDelivered: true } });
+      await col().updateOne({ invoiceId, labOId: labOId(req) }, { $set: { isDelivered: true } });
       return reply.send({ success: true });
     } catch (err) {
       req.log.error(err);
@@ -411,14 +435,14 @@ async function routes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/delete ──────────────────────────────────────
-  fastify.patch("/invoice/:invoiceId/delete", invoiceIdSchema, async (req, reply) => {
+  fastify.patch("/invoice/:invoiceId/delete", { ...invoiceIdSchema, ...requireDelete }, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
-      const invoice = await col().findOne({ invoiceId }, { projection: { isDeleted: 1 } });
+      const invoice = await col().findOne({ invoiceId, labOId: labOId(req) }, { projection: { isDeleted: 1 } });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
       if (invoice.isDeleted) return reply.code(400).send({ error: "Invoice is already deleted" });
 
-      await col().updateOne({ invoiceId }, { $set: { isDeleted: true, deletedAt: Date.now() } });
+      await col().updateOne({ invoiceId, labOId: labOId(req) }, { $set: { isDeleted: true, deletedAt: Date.now() } });
       return reply.send({ success: true });
     } catch (err) {
       req.log.error(err);
