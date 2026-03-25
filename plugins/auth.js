@@ -4,9 +4,6 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 
-// Auth plugin for lab-specific STAFF (replaces old "users" collection)
-// Supports 3 role types: admin / staff / supportAdmin
-// Stores permissions as a separate object (role is now a string)
 export default async function authPlugin(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
@@ -14,8 +11,8 @@ export default async function authPlugin(fastify) {
   // === JWT CONFIG FROM ENVIRONMENT VARIABLES ===
   const ACCESS_SECRET = process.env.JWT_SECRET;
   const REFRESH_SECRET = process.env.REFRESH_SECRET;
-  const ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY; // e.g. "15m"
-  const REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY; // e.g. "7d"
+  const ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY;
+  const REFRESH_EXPIRY = process.env.JWT_REFRESH_EXPIRY;
 
   if (!ACCESS_SECRET || !REFRESH_SECRET || !ACCESS_EXPIRY || !REFRESH_EXPIRY) {
     throw new Error(
@@ -24,23 +21,34 @@ export default async function authPlugin(fastify) {
     );
   }
 
+  // BUG FIX 2: Parse REFRESH_EXPIRY into ms so DB TTL always matches the JWT expiry.
+  // Supports the same units Fastify JWT accepts: s, m, h, d (e.g. "7d", "15m", "1h")
+  const parseExpiry = (expiry) => {
+    const units = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const match = expiry.match(/^(\d+)([smhd])$/);
+    if (!match) {
+      throw new Error(`Invalid JWT_REFRESH_EXPIRY format: "${expiry}". Use formats like "7d", "15m", "1h".`);
+    }
+    return parseInt(match[1]) * units[match[2]];
+  };
+
+  const REFRESH_EXPIRY_MS = parseExpiry(REFRESH_EXPIRY);
+
   // === Register Fastify JWT for access tokens (short-lived) ===
   fastify.register(fastifyJwt, {
     secret: ACCESS_SECRET,
-    sign: { expiresIn: ACCESS_EXPIRY }, // ← now comes from .env
+    sign: { expiresIn: ACCESS_EXPIRY },
   });
 
   // === Decorators ===
-  // Authenticate decorator: verifies the access token
   fastify.decorate("authenticate", async (req, reply) => {
     try {
-      await req.jwtVerify(); // automatically populates req.user
+      await req.jwtVerify();
     } catch {
       reply.code(401).send({ error: "Unauthorized: Invalid or expired access token" });
     }
   });
 
-  // Authorize decorator: checks permissions object (role is now a string)
   fastify.decorate("authorize", (permission) => async (req, reply) => {
     if (!req.user.permissions?.[permission]) {
       return reply.code(403).send({ error: "Forbidden: Missing required permission" });
@@ -49,25 +57,24 @@ export default async function authPlugin(fastify) {
 
   // === Secure cookie options for refresh tokens ===
   const cookieOptions = {
-    httpOnly: true, // not accessible via JavaScript
-    path: "/", // available site-wide
-    sameSite: "strict", // prevent CSRF
-    secure: process.env.NODE_ENV === "production", // HTTPS only in production
+    httpOnly: true,
+    path: "/",
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
   };
 
-  // === Helper function: hash refresh tokens for secure storage ===
+  // === Helper: hash refresh tokens before storing ===
   const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
   // === MongoDB indexes ===
-  // These ensure efficient queries and automatic TTL cleanup of expired tokens
   await Promise.all([
-    tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }), // auto-remove expired tokens
-    tokensCollection().createIndex({ userId: 1, deviceId: 1 }), // quick lookup per device
-    tokensCollection().createIndex({ userId: 1, labId: 1 }), // quick lookup per lab
+    tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
+    tokensCollection().createIndex({ userId: 1, labId: 1 }),
   ]);
 
   // ──────────────────────────────
-  // 1. REGISTER (now for STAFF)
+  // 1. REGISTER
   // ──────────────────────────────
   fastify.post("/register", async (req, reply) => {
     const { labId, labOid, phone, name, password, role, permissions, email } = req.body || {};
@@ -76,13 +83,11 @@ export default async function authPlugin(fastify) {
       return reply.code(400).send({ error: "Missing required fields" });
     }
 
-    // Validate allowed roles
     const allowedRoles = ["admin", "staff", "supportAdmin"];
     if (!allowedRoles.includes(role)) {
       return reply.code(400).send({ error: "Invalid role" });
     }
 
-    // Whitelist allowed permissions (exact keys from your schema)
     const allowedPermissions = [
       "createInvoice",
       "editInvoice",
@@ -96,22 +101,21 @@ export default async function authPlugin(fastify) {
       cleanPermissions[perm] = Boolean(permissions[perm]);
     }
 
-    // Check if the phone number already exists in this lab
     const exists = await staffsCollection().findOne({ labId, phone });
     if (exists) {
       return reply.code(409).send({ error: "Phone already registered in this lab" });
     }
 
-    // Hash password before storing
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert new staff
+    // BUG FIX 4: password field was missing — staff could never log in.
     const result = await staffsCollection().insertOne({
       labOid,
       labId,
       name,
       phone,
-      role, // string: "admin" | "staff" | "supportAdmin"
+      password: hashedPassword,
+      role,
       permissions: cleanPermissions,
       isActive: true,
       isDeleted: false,
@@ -137,12 +141,10 @@ export default async function authPlugin(fastify) {
 
     const staff = await staffsCollection().findOne({ labId, phone });
 
-    // Combined check: invalid credentials OR inactive/deleted account
     if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.isDeleted || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
-    // JWT payload includes everything needed for authorization
     const payload = {
       id: staff._id.toString(),
       role: staff.role,
@@ -151,43 +153,38 @@ export default async function authPlugin(fastify) {
       labOid: staff.labOid,
     };
 
-    const deviceId = randomUUID(); // unique identifier for this device/session
-
-    // Create access token (short-lived) – expiry now comes from .env
+    const deviceId = randomUUID();
     const accessToken = await reply.jwtSign(payload);
 
-    // Create refresh token (long-lived) – expiry now comes from .env
     const refreshTokenPlain = await fastify.jwt.sign(payload, {
       key: REFRESH_SECRET,
-      expiresIn: REFRESH_EXPIRY, // ← from .env
+      expiresIn: REFRESH_EXPIRY,
     });
     const refreshTokenHashed = hashToken(refreshTokenPlain);
 
     // Enforce max 5 devices: delete oldest session if needed
     const sessions = await tokensCollection().find({ userId: payload.id }).sort({ createdAt: 1 }).toArray();
-
     if (sessions.length >= 5) {
       await tokensCollection().deleteOne({ _id: sessions[0]._id });
     }
 
-    // Store refresh token session in DB
     await tokensCollection().insertOne({
       userId: payload.id,
       labId: payload.labId,
       deviceId,
       refreshToken: refreshTokenHashed,
       createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // TTL still matches REFRESH_EXPIRY
+      // BUG FIX 2: Use REFRESH_EXPIRY_MS so DB TTL matches the JWT expiry from .env
+      expiresAt: new Date(Date.now() + REFRESH_EXPIRY_MS),
     });
 
-    // Set refresh token and device ID as cookies
     reply.setCookie("refreshToken", refreshTokenPlain, cookieOptions).setCookie("deviceId", deviceId, cookieOptions);
 
     return { accessToken };
   });
 
   // ──────────────────────────────
-  // 3. REFRESH (rotate tokens) – MongoDB driver v7+ compatible
+  // 3. REFRESH (rotate tokens)
   // ──────────────────────────────
   fastify.post("/refresh", async (req, reply) => {
     const { refreshToken, deviceId } = req.cookies || {};
@@ -212,14 +209,12 @@ export default async function authPlugin(fastify) {
       labOid: decoded.labOid,
     };
 
-    // Generate a new refresh token (rotate) – expiry now comes from .env
     const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
       key: REFRESH_SECRET,
-      expiresIn: REFRESH_EXPIRY, // ← from .env
+      expiresIn: REFRESH_EXPIRY,
     });
     const newRefreshTokenHashed = hashToken(newRefreshTokenPlain);
 
-    // Atomic update to prevent reuse or race conditions
     const updatedSession = await tokensCollection().findOneAndUpdate(
       {
         userId: payload.id,
@@ -232,20 +227,18 @@ export default async function authPlugin(fastify) {
         $set: {
           refreshToken: newRefreshTokenHashed,
           createdAt: new Date(),
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          // BUG FIX 2: Use REFRESH_EXPIRY_MS here too
+          expiresAt: new Date(Date.now() + REFRESH_EXPIRY_MS),
         },
       },
-      { returnDocument: "after" }, // MongoDB driver v7+ returns the document directly
+      { returnDocument: "after" },
     );
 
     if (!updatedSession) {
       return reply.code(401).send({ error: "Session expired or revoked" });
     }
 
-    // Issue new access token
     const newAccessToken = await reply.jwtSign(payload);
-
-    // Update cookie with rotated refresh token
     reply.setCookie("refreshToken", newRefreshTokenPlain, cookieOptions);
 
     return { accessToken: newAccessToken };
@@ -256,18 +249,31 @@ export default async function authPlugin(fastify) {
   // ──────────────────────────────
   fastify.post("/logout", async (req, reply) => {
     const { refreshToken, deviceId } = req.cookies || {};
+
     if (refreshToken && deviceId) {
+      let userId;
+      try {
+        // Decode without verifying expiry — we just need the userId for scoping
+        const decoded = fastify.jwt.decode(refreshToken);
+        userId = decoded?.id;
+      } catch {
+        // Decoding failed — still clear cookies below
+      }
+
+      // BUG FIX 3: Scope delete to userId so one user can't terminate another's session
       await tokensCollection().deleteOne({
+        ...(userId && { userId }),
         deviceId,
         refreshToken: hashToken(refreshToken),
       });
     }
+
     reply.clearCookie("refreshToken", cookieOptions).clearCookie("deviceId", cookieOptions);
     return { message: "Logged out from this device" };
   });
 
   // ──────────────────────────────
-  // 5. LOGOUT ALL DEVICES (lab-specific)
+  // 5. LOGOUT ALL DEVICES
   // ──────────────────────────────
   fastify.post("/logout-all", { onRequest: [fastify.authenticate] }, async (req, reply) => {
     await tokensCollection().deleteMany({
