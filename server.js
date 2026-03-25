@@ -88,6 +88,7 @@ await fastify.register(swaggerUi, {
 const API = "/api/v1";
 
 await fastify.register(authPlugin, { prefix: API });
+
 fastify.register(cashmemoRoutes, { prefix: API });
 fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
