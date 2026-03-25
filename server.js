@@ -59,7 +59,7 @@ try {
 }
 
 await fastify.register(fastifyCookie);
-await fastify.register(authPlugin);
+
 
 // ── Swagger ───────────────────────────────────────────────────────────────────
 await fastify.register(swagger, {
@@ -87,6 +87,7 @@ await fastify.register(swaggerUi, {
 // ── Routes ────────────────────────────────────────────────────────────────────
 const API = "/api/v1";
 
+await fastify.register(authPlugin, { prefix: API });
 fastify.register(cashmemoRoutes, { prefix: API });
 fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
@@ -94,6 +95,7 @@ fastify.register(staffRoutes, { prefix: API });
 fastify.register(labTestRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
+
 
 fastify.get("/", (req, reply) => reply.send("Ok"));
 
