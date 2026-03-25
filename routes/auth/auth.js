@@ -1,6 +1,5 @@
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
-import { ObjectId } from "mongodb";
 
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
@@ -8,9 +7,9 @@ async function authRoutes(fastify) {
 
   // ── POST /register ────────────────────────────────────────────────────────
   fastify.post("/register", async (req, reply) => {
-    const { labId, labOId, phone, name, password, role, permissions, email } = req.body || {};
+    const { labKey, labId, phone, name, password, role, permissions, email } = req.body || {};
 
-    if (!labId || !labOId || !phone || !name || !password || !role || typeof permissions !== "object") {
+    if (!labKey || !labId || !phone || !name || !password || !role || typeof permissions !== "object") {
       return reply.code(400).send({ error: "Missing required fields" });
     }
 
@@ -32,14 +31,14 @@ async function authRoutes(fastify) {
       cleanPermissions[perm] = Boolean(permissions[perm]);
     }
 
-    const exists = await staffsCollection().findOne({ labId, phone });
+    const exists = await staffsCollection().findOne({ labKey, phone });
     if (exists) return reply.code(409).send({ error: "Phone already registered in this lab" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await staffsCollection().insertOne({
-      labOId, // string form of lab's _id
-      labId, // numeric short ID (display only)
+      labId, // string form of lab's _id
+      labKey, // numeric short ID (display only)
       name,
       phone,
       password: hashedPassword,
@@ -57,12 +56,12 @@ async function authRoutes(fastify) {
 
   // ── POST /login ───────────────────────────────────────────────────────────
   fastify.post("/login", async (req, reply) => {
-    const { labId, phone, password } = req.body || {};
-    if (!labId || !phone || !password) {
+    const { labKey, phone, password } = req.body || {};
+    if (!labKey || !phone || !password) {
       return reply.code(400).send({ error: "Missing required fields" });
     }
 
-    const staff = await staffsCollection().findOne({ labId, phone });
+    const staff = await staffsCollection().findOne({ labKey, phone });
     if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.isDeleted || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
@@ -71,8 +70,8 @@ async function authRoutes(fastify) {
       id: staff._id.toString(),
       role: staff.role,
       permissions: staff.permissions,
-      labId: staff.labId,
-      labOId: staff.labOId, // string — ObjectId is not JSON-serializable
+      labKey: staff.labKey,
+      labId: staff.labId, // string — ObjectId is not JSON-serializable
     };
 
     const deviceId = randomUUID();
@@ -122,8 +121,8 @@ async function authRoutes(fastify) {
       id: decoded.id,
       role: decoded.role,
       permissions: decoded.permissions,
+      labKey: decoded.labKey,
       labId: decoded.labId,
-      labOId: decoded.labOId,
     };
 
     const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
