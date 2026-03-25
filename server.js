@@ -16,7 +16,17 @@ import commissionRoutes from "./routes/commission/commission.js";
 
 dotenv.config();
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({
+  disableRequestLogging: true,
+  logger: {
+    transport: {
+      target: "pino-pretty",
+      options: {
+        ignore: "pid,hostname,level,time,reqId,req,res,responseTime",
+      },
+    },
+  },
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 await fastify.register(cors, {
