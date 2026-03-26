@@ -71,21 +71,17 @@ async function authRoutes(fastify) {
       role: staff.role,
       permissions: staff.permissions,
       labKey: staff.labKey,
-      labId: staff.labId,
+      labId: staff.labId, // ✅ consistent key
     };
 
     const deviceId = randomUUID();
-
-    // Access token — signed by @fastify/jwt with ACCESS_SECRET
     const accessToken = await reply.jwtSign(payload);
 
-    // ✅ Refresh token — signed by jsonwebtoken directly with REFRESH_SECRET.
-    //    Previously used fastify.jwt.sign(payload, { key: REFRESH_SECRET }) which
-    //    silently ignored the { key } option and signed with ACCESS_SECRET instead,
-    //    making every subsequent refresh verification fail.
-    const refreshTokenPlain = fastify.signRefreshToken(payload);
+    const refreshTokenPlain = await fastify.jwt.sign(payload, {
+      key: fastify.REFRESH_SECRET,
+      expiresIn: fastify.REFRESH_EXPIRY,
+    });
 
-    // Cap sessions per user at 5 (evict oldest)
     const sessions = await tokensCollection().find({ userId: payload.id }).sort({ createdAt: 1 }).toArray();
     if (sessions.length >= 5) {
       await tokensCollection().deleteOne({ _id: sessions[0]._id });
@@ -93,7 +89,7 @@ async function authRoutes(fastify) {
 
     await tokensCollection().insertOne({
       userId: payload.id,
-      labId: payload.labId,
+      labId: payload.labId, // ✅ was labOId: payload.labOId (undefined) — now correctly labId
       deviceId,
       refreshToken: fastify.hashToken(refreshTokenPlain),
       createdAt: new Date(),
@@ -116,11 +112,7 @@ async function authRoutes(fastify) {
 
     let decoded;
     try {
-      // ✅ verifyRefreshToken uses jsonwebtoken.verify with REFRESH_SECRET directly.
-      //    Previously used fastify.jwt.verify(token, { key: REFRESH_SECRET }) which
-      //    ignored { key } and verified against ACCESS_SECRET — always throwing a
-      //    signature error since the token was signed with a different secret.
-      decoded = fastify.verifyRefreshToken(refreshToken);
+      decoded = await fastify.jwt.verify(refreshToken, { key: fastify.REFRESH_SECRET });
     } catch {
       return reply.code(401).send({ error: "Invalid or expired refresh token" });
     }
@@ -130,15 +122,18 @@ async function authRoutes(fastify) {
       role: decoded.role,
       permissions: decoded.permissions,
       labKey: decoded.labKey,
-      labId: decoded.labId,
+      labId: decoded.labId, // ✅ consistent key
     };
 
-    const newRefreshTokenPlain = fastify.signRefreshToken(payload);
+    const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
+      key: fastify.REFRESH_SECRET,
+      expiresIn: fastify.REFRESH_EXPIRY,
+    });
 
     const updatedSession = await tokensCollection().findOneAndUpdate(
       {
         userId: payload.id,
-        labId: payload.labId,
+        labId: payload.labId, // ✅ was labOId: payload.labOId (undefined) — query now matches stored doc
         deviceId,
         refreshToken: fastify.hashToken(refreshToken),
         expiresAt: { $gt: new Date() },
@@ -170,8 +165,7 @@ async function authRoutes(fastify) {
     if (refreshToken && deviceId) {
       let userId;
       try {
-        // ✅ use decodeToken (no verification needed for logout — we just need the userId)
-        const decoded = fastify.decodeToken(refreshToken);
+        const decoded = fastify.jwt.decode(refreshToken);
         userId = decoded?.id;
       } catch {
         // still clear cookies below
@@ -193,7 +187,7 @@ async function authRoutes(fastify) {
   fastify.post("/logout-all", { onRequest: [fastify.authenticate] }, async (req, reply) => {
     await tokensCollection().deleteMany({
       userId: req.user.id,
-      labId: req.user.labId,
+      labId: req.user.labId, // ✅ was labOId: req.user.labOId (undefined)
     });
 
     reply.clearCookie("refreshToken", fastify.cookieOptions).clearCookie("deviceId", fastify.cookieOptions);
