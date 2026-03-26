@@ -3,8 +3,8 @@ import cors from "@fastify/cors";
 import mongodb from "@fastify/mongodb";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
-import dotenv from "dotenv";
 import fastifyCookie from "@fastify/cookie";
+import dotenv from "dotenv";
 
 import { ensureIndexes } from "./db/indexes.js";
 import authPlugin from "./plugins/auth.js";
@@ -31,6 +31,10 @@ const fastify = Fastify({
   },
 });
 
+// ── 1. Cookie plugin — must be first so reply.setCookie is available everywhere
+await fastify.register(fastifyCookie);
+
+// ── 2. CORS — must be before routes so preflight OPTIONS requests are handled
 await fastify.register(cors, {
   origin: [
     "https://sfahad.netlify.app",
@@ -42,11 +46,13 @@ await fastify.register(cors, {
   credentials: true,
 });
 
+// ── 3. MongoDB
 await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
 
+// ── 4. Ensure DB indexes
 try {
   await ensureIndexes(fastify.mongo.db);
   fastify.log.info("DB indexes ensured");
@@ -55,12 +61,10 @@ try {
   process.exit(1);
 }
 
-await fastify.register(fastifyCookie);
-
-// ── Auth plugin first (hoists decorators to root scope) ───────────────────────
+// ── 5. Auth plugin (decorates fastify.authenticate, fastify.authorize, etc.)
 await fastify.register(authPlugin);
 
-// ── Swagger ───────────────────────────────────────────────────────────────────
+// ── 6. Swagger
 await fastify.register(swagger, {
   openapi: {
     info: {
@@ -68,7 +72,12 @@ await fastify.register(swagger, {
       description: "REST API for LabPilot Pro",
       version: "1.0.0",
     },
-    servers: [{ url: `http://localhost:${process.env.PORT || 5000}`, description: "Development server" }],
+    servers: [
+      {
+        url: `http://localhost:${process.env.PORT || 5000}`,
+        description: "Development server",
+      },
+    ],
   },
 });
 
@@ -78,7 +87,7 @@ await fastify.register(swaggerUi, {
   staticCSP: true,
 });
 
-// ── Routes ────────────────────────────────────────────────────────────────────
+// ── 7. Routes
 const API = "/api/v1";
 
 fastify.register(authRoutes, { prefix: API });
