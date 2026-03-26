@@ -54,7 +54,7 @@ async function authPlugin(fastify) {
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    sameSite: "none",
     secure: process.env.NODE_ENV === "production",
   });
 
