@@ -54,10 +54,9 @@ async function authPlugin(fastify) {
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
-    secure: true,
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
   });
-
   await Promise.all([
     tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
