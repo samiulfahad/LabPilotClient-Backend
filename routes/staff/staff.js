@@ -129,7 +129,7 @@ const normalizePermissions = (perms = {}) => ({
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function routes(fastify, options) {
+async function staffRoutes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -314,4 +314,4 @@ async function routes(fastify, options) {
   });
 }
 
-export default routes;
+export default staffRoutes;

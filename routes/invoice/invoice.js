@@ -200,7 +200,7 @@ const patientInfoSchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function routes(fastify) {
+async function invoiceRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -644,4 +644,4 @@ async function routes(fastify) {
   );
 }
 
-export default routes;
+export default invoiceRoutes;

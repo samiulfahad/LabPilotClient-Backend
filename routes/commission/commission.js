@@ -1,18 +1,23 @@
 const summaryQuerySchema = {
   schema: {
+    tags: ["Commission"],
+    summary: "Get commission summary for a date range",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
       properties: {
-        startDate: { type: "integer" },
-        endDate:   { type: "integer" },
+        startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
+        endDate:   { type: "integer", description: "End date as Unix timestamp (ms)" },
       },
     },
   },
 };
 
-async function routes(fastify) {
+async function commissionRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
+  const labId = (req) => toObjectId(req.user.labId);
+
+  fastify.addHook("onRequest", fastify.authenticate);
 
   // ── GET /commission/summary ───────────────────────────────────────────────
   fastify.get("/commission/summary", summaryQuerySchema, async (req, reply) => {
@@ -21,31 +26,29 @@ async function routes(fastify) {
     if (startDate > endDate)
       return reply.code(400).send({ error: "startDate must be before endDate" });
 
-    const labId = 123456; // TODO: req.user.labId
-
     try {
       const rows = await col()
         .aggregate(
           [
             {
               $match: {
-                labId,
+                labId: labId(req),                              // ✅ dynamic, from auth
                 createdAt: { $gte: startDate, $lte: endDate },
-                isDeleted: false,
+                "deletion.status": false,                       // ✅ was isDeleted: false
                 "referrer.name": { $exists: true, $type: "string" },
               },
             },
             {
               $group: {
-                _id:              { $ifNull: ["$referrer.id", "$referrer.name"] },
-                name:             { $first: "$referrer.name" },
-                type:             { $first: "$referrer.type" },
-                referrerId:       { $first: "$referrer.id" },
-                totalCommission:  { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
-                totalDiscount:    { $sum: { $ifNull: ["$amount.referrerDiscount",   0] } },
-                totalFinal:       { $sum: { $ifNull: ["$amount.final",              0] } },
-                totalNet:         { $sum: { $ifNull: ["$amount.net",                0] } },
-                totalInvoices:    { $sum: 1 },
+                _id:             { $ifNull: ["$referrer.id", "$referrer.name"] },
+                name:            { $first: "$referrer.name" },
+                type:            { $first: "$referrer.type" },
+                referrerId:      { $first: "$referrer.id" },
+                totalCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
+                totalDiscount:   { $sum: { $ifNull: ["$amount.referrerDiscount",   0] } },
+                totalFinal:      { $sum: { $ifNull: ["$amount.final",              0] } },
+                totalNet:        { $sum: { $ifNull: ["$amount.net",                0] } },
+                totalInvoices:   { $sum: 1 },
                 invoices: {
                   $push: {
                     invoiceId:   "$invoiceId",
@@ -67,14 +70,14 @@ async function routes(fastify) {
             },
             { $sort: { totalCommission: -1, totalInvoices: -1 } },
           ],
-          { hint: "idx_labId_createdAt_isDeleted", allowDiskUse: true }
+          { allowDiskUse: true }                               // ✅ removed stale hint
         )
         .toArray();
 
       const registered   = [];
       const unregistered = [];
       let totalCommission = 0, totalDiscount = 0;
-      let totalFinal = 0,      totalNet = 0, totalInvoices = 0;
+      let totalFinal = 0,      totalNet = 0,    totalInvoices = 0;
 
       for (const row of rows) {
         totalCommission += row.totalCommission;
@@ -116,4 +119,4 @@ async function routes(fastify) {
   });
 }
 
-export default routes;
+export default commissionRoutes;

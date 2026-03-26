@@ -104,7 +104,7 @@ const deleteReferrerSchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function routes(fastify, options) {
+async function referrerRoutes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -236,4 +236,4 @@ async function routes(fastify, options) {
   });
 }
 
-export default routes;
+export default referrerRoutes;

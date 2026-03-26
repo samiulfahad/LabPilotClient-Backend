@@ -19,7 +19,7 @@ const summaryQuerySchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function routes(fastify) {
+async function cashmemoRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -123,4 +123,4 @@ async function routes(fastify) {
   });
 }
 
-export default routes;
+export default cashmemoRoutes;
