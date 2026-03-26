@@ -76,13 +76,14 @@ async function authRoutes(fastify) {
 
     const deviceId = randomUUID();
 
-    // Access token — signed with ACCESS_SECRET via the default @fastify/jwt instance
+    // Access token — signed by @fastify/jwt with ACCESS_SECRET
     const accessToken = await reply.jwtSign(payload);
 
-    // ✅ Refresh token — signed with REFRESH_SECRET via the namespaced instance.
-    //    reply.refreshJwtSign is decorated by the { namespace: "refresh" } registration
-    //    and uses its own isolated secret + expiry (REFRESH_SECRET / REFRESH_EXPIRY).
-    const refreshTokenPlain = await reply.refreshJwtSign(payload);
+    // ✅ Refresh token — signed by jsonwebtoken directly with REFRESH_SECRET.
+    //    Previously used fastify.jwt.sign(payload, { key: REFRESH_SECRET }) which
+    //    silently ignored the { key } option and signed with ACCESS_SECRET instead,
+    //    making every subsequent refresh verification fail.
+    const refreshTokenPlain = fastify.signRefreshToken(payload);
 
     // Cap sessions per user at 5 (evict oldest)
     const sessions = await tokensCollection().find({ userId: payload.id }).sort({ createdAt: 1 }).toArray();
@@ -115,12 +116,11 @@ async function authRoutes(fastify) {
 
     let decoded;
     try {
-      // ✅ refreshJwtVerify uses REFRESH_SECRET via the namespaced instance.
-      //    Internally @fastify/jwt attaches the token from the Authorization header,
-      //    but we need to verify a token we pass in manually (from a cookie).
-      //    The correct way is to use fastify.refresh.verify() which is the raw
-      //    verify method on the namespaced jwt instance.
-      decoded = await fastify.refresh.verify(refreshToken);
+      // ✅ verifyRefreshToken uses jsonwebtoken.verify with REFRESH_SECRET directly.
+      //    Previously used fastify.jwt.verify(token, { key: REFRESH_SECRET }) which
+      //    ignored { key } and verified against ACCESS_SECRET — always throwing a
+      //    signature error since the token was signed with a different secret.
+      decoded = fastify.verifyRefreshToken(refreshToken);
     } catch {
       return reply.code(401).send({ error: "Invalid or expired refresh token" });
     }
@@ -133,8 +133,7 @@ async function authRoutes(fastify) {
       labId: decoded.labId,
     };
 
-    // Sign new refresh token with REFRESH_SECRET
-    const newRefreshTokenPlain = await fastify.refresh.sign(payload);
+    const newRefreshTokenPlain = fastify.signRefreshToken(payload);
 
     const updatedSession = await tokensCollection().findOneAndUpdate(
       {
@@ -171,8 +170,8 @@ async function authRoutes(fastify) {
     if (refreshToken && deviceId) {
       let userId;
       try {
-        // decode without verifying — we just need the userId to delete the session
-        const decoded = fastify.refresh.decode(refreshToken);
+        // ✅ use decodeToken (no verification needed for logout — we just need the userId)
+        const decoded = fastify.decodeToken(refreshToken);
         userId = decoded?.id;
       } catch {
         // still clear cookies below

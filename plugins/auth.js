@@ -1,4 +1,5 @@
 import fastifyJwt from "@fastify/jwt";
+import jwt from "jsonwebtoken"; // ✅ use jsonwebtoken directly for refresh tokens
 import crypto from "crypto";
 import fp from "fastify-plugin";
 
@@ -20,39 +21,17 @@ async function authPlugin(fastify) {
   const parseExpiry = (expiry) => {
     const units = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
     const match = expiry.match(/^(\d+)([smhd])$/);
-    if (!match) throw new Error(`Invalid expiry format: "${expiry}". Use formats like "7d", "15m", "1h".`);
+    if (!match) throw new Error(`Invalid JWT_REFRESH_EXPIRY format: "${expiry}". Use formats like "7d", "15m", "1h".`);
     return parseInt(match[1]) * units[match[2]];
   };
 
   const REFRESH_EXPIRY_MS = parseExpiry(REFRESH_EXPIRY);
 
-  // ── Access token JWT instance (default, no namespace) ─────────────────────
-  // reply.jwtSign / request.jwtVerify use ACCESS_SECRET
+  // @fastify/jwt handles access tokens only (signed/verified with ACCESS_SECRET)
   await fastify.register(fastifyJwt, {
     secret: ACCESS_SECRET,
     sign: { expiresIn: ACCESS_EXPIRY },
   });
-
-  // ── Refresh token JWT instance (namespaced) ───────────────────────────────
-  // Per the official @fastify/jwt docs, registering with a namespace gives each
-  // instance its own isolated secret and decorates the instance with:
-  //   reply.refreshJwtSign(payload)
-  //   request.refreshJwtVerify()
-  //   request.refreshJwtDecode()
-  // This is the correct way to use two different secrets in one app — the old
-  // approach of passing { key: REFRESH_SECRET } to fastify.jwt.sign/verify is
-  // not a supported API and is silently ignored, causing every refresh to sign
-  // and verify with ACCESS_SECRET, making refresh tokens expire in 1 minute.
-  await fastify.register(fastifyJwt, {
-    secret: REFRESH_SECRET,
-    sign: { expiresIn: REFRESH_EXPIRY },
-    namespace: "refresh",
-    jwtSign: "refreshJwtSign",
-    jwtVerify: "refreshJwtVerify",
-    jwtDecode: "refreshJwtDecode",
-  });
-
-  // ── Decorators ────────────────────────────────────────────────────────────
 
   fastify.decorate("authenticate", async (req, reply) => {
     try {
@@ -70,6 +49,19 @@ async function authPlugin(fastify) {
 
   fastify.decorate("hashToken", (token) => crypto.createHash("sha256").update(token).digest("hex"));
 
+  // ✅ signRefreshToken / verifyRefreshToken use jsonwebtoken directly with REFRESH_SECRET.
+  //    @fastify/jwt's fastify.jwt.sign/verify always use the single registered secret
+  //    (ACCESS_SECRET), so passing { key: REFRESH_SECRET } to them is silently ignored —
+  //    that was the root cause of every refresh attempt failing with a signature error.
+  fastify.decorate("signRefreshToken", (payload) => jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRY }));
+
+  fastify.decorate("verifyRefreshToken", (token) =>
+    // throws JsonWebTokenError / TokenExpiredError on failure — caller must try/catch
+    jwt.verify(token, REFRESH_SECRET),
+  );
+
+  fastify.decorate("decodeToken", (token) => jwt.decode(token));
+
   fastify.decorate("REFRESH_EXPIRY_MS", REFRESH_EXPIRY_MS);
 
   fastify.decorate("cookieOptions", {
@@ -79,7 +71,6 @@ async function authPlugin(fastify) {
     secure: process.env.NODE_ENV === "production",
   });
 
-  // ── Indexes ───────────────────────────────────────────────────────────────
   await Promise.all([
     tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
