@@ -37,8 +37,8 @@ async function authRoutes(fastify) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await staffsCollection().insertOne({
-      labId, // string form of lab's _id
-      labKey, // numeric short ID (display only)
+      labId,
+      labKey,
       name,
       phone,
       password: hashedPassword,
@@ -71,7 +71,7 @@ async function authRoutes(fastify) {
       role: staff.role,
       permissions: staff.permissions,
       labKey: staff.labKey,
-      labId: staff.labId, // string — ObjectId is not JSON-serializable
+      labId: staff.labId, // ✅ consistent key
     };
 
     const deviceId = randomUUID();
@@ -89,7 +89,7 @@ async function authRoutes(fastify) {
 
     await tokensCollection().insertOne({
       userId: payload.id,
-      labOId: payload.labOId, // use labOId as the lab identifier in tokens too
+      labId: payload.labId, // ✅ was labOId: payload.labOId (undefined) — now correctly labId
       deviceId,
       refreshToken: fastify.hashToken(refreshTokenPlain),
       createdAt: new Date(),
@@ -122,7 +122,7 @@ async function authRoutes(fastify) {
       role: decoded.role,
       permissions: decoded.permissions,
       labKey: decoded.labKey,
-      labId: decoded.labId,
+      labId: decoded.labId, // ✅ consistent key
     };
 
     const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
@@ -133,7 +133,7 @@ async function authRoutes(fastify) {
     const updatedSession = await tokensCollection().findOneAndUpdate(
       {
         userId: payload.id,
-        labOId: payload.labOId,
+        labId: payload.labId, // ✅ was labOId: payload.labOId (undefined) — query now matches stored doc
         deviceId,
         refreshToken: fastify.hashToken(refreshToken),
         expiresAt: { $gt: new Date() },
@@ -187,7 +187,7 @@ async function authRoutes(fastify) {
   fastify.post("/logout-all", { onRequest: [fastify.authenticate] }, async (req, reply) => {
     await tokensCollection().deleteMany({
       userId: req.user.id,
-      labOId: req.user.labOId,
+      labId: req.user.labId, // ✅ was labOId: req.user.labOId (undefined)
     });
 
     reply.clearCookie("refreshToken", fastify.cookieOptions).clearCookie("deviceId", fastify.cookieOptions);

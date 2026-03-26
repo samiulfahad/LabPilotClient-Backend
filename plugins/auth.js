@@ -46,9 +46,11 @@ async function authPlugin(fastify) {
   });
 
   fastify.decorate("hashToken", (token) => crypto.createHash("sha256").update(token).digest("hex"));
+
   fastify.decorate("REFRESH_SECRET", REFRESH_SECRET);
   fastify.decorate("REFRESH_EXPIRY", REFRESH_EXPIRY);
   fastify.decorate("REFRESH_EXPIRY_MS", REFRESH_EXPIRY_MS);
+
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
@@ -59,7 +61,7 @@ async function authPlugin(fastify) {
   await Promise.all([
     tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
-    tokensCollection().createIndex({ userId: 1, labId: 1 }),
+    tokensCollection().createIndex({ userId: 1, labId: 1 }), // ✅ was labId: 1 — already correct, kept for clarity
   ]);
 }
 
