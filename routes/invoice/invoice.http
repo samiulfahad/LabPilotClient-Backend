@@ -1,297 +1,216 @@
-@baseUrl = http://localhost:5000/api/v1
-@contentType = application/json
+### ─── Invoice Routes ─────────────────────────────────────────────────────────
 
-# ==============================================================================
-# INVOICE
-# ==============================================================================
+@baseUrl = http://localhost:3000
+@token = YOUR_JWT_TOKEN_HERE
+@invoiceId = ABC1234
 
-### GET required data (referrers + tests)
+### ── GET /invoice/required-data ─────────────────────────────────────────────
+
 GET {{baseUrl}}/invoice/required-data
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
 
-###
+### ── POST /invoice/add ───────────────────────────────────────────────────────
 
-### POST create invoice (with registered referrer)
 POST {{baseUrl}}/invoice/add
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
 
 {
   "patient": {
-    "name": "Samiul Islam",
+    "name": "John Doe",
     "gender": "male",
-    "age": 23,
+    "age": 35,
     "contactNumber": "01712345678"
   },
   "referrer": {
-    "id": "69b002efa94903cfac8249c9",
-    "name": "Dr. Smith ( mbbs )",
+    "id": "507f1f77bcf86cd799439011",
+    "name": "Dr. Smith",
     "type": "doctor"
   },
   "tests": [
     {
-      "testId": "69a70b8c2c76412ea1978d16",
-      "name": "CBC",
-      "price": 300,
-      "schemaId": "69a70bcd2c76412ea1978d18"
+      "testId": "507f1f77bcf86cd799439012",
+      "name": "Complete Blood Count",
+      "price": 500,
+      "schemaId": "507f1f77bcf86cd799439013"
     },
     {
-      "testId": "69a70b992c76412ea1978d17",
-      "name": "RBS",
-      "price": 200,
-      "schemaId": "69a4c8e1aefbe4654b003618"
-    }
-  ],
-  "amount": {
-    "initial": 500,
-    "referrerDiscount": 100,
-    "referrerCommission": 0,
-    "labAdjustment": 200,
-    "final": 200,
-    "net": 200,
-    "paid": 200
-  }
-}
-
-###
-
-### POST create invoice (unregistered referrer — walk-in)
-POST {{baseUrl}}/invoice/add
-Content-Type: {{contentType}}
-
-{
-  "patient": {
-    "name": "Rahim Uddin",
-    "gender": "male",
-    "age": 45,
-    "contactNumber": "01898765432"
-  },
-  "referrer": {
-    "id": null,
-    "name": "Dr. Karim",
-    "type": null
-  },
-  "tests": [
-    {
-      "testId": "69a70b8c2c76412ea1978d16",
-      "name": "CBC",
+      "testId": "507f1f77bcf86cd799439014",
+      "name": "Blood Sugar",
       "price": 300,
-      "schemaId": "69a70bcd2c76412ea1978d18"
-    }
-  ],
-  "amount": {
-    "initial": 300,
-    "referrerDiscount": 0,
-    "referrerCommission": 0,
-    "labAdjustment": 0,
-    "final": 300,
-    "net": 300,
-    "paid": 150
-  }
-}
-
-###
-
-### POST create invoice (no referrer)
-POST {{baseUrl}}/invoice/add
-Content-Type: {{contentType}}
-
-{
-  "patient": {
-    "name": "Fatema Begum",
-    "gender": "female",
-    "age": 35,
-    "contactNumber": "01611223344"
-  },
-  "tests": [
-    {
-      "testId": "69a70b992c76412ea1978d17",
-      "name": "RBS",
-      "price": 200,
       "schemaId": null
     }
   ],
   "amount": {
-    "initial": 200,
-    "referrerDiscount": 0,
-    "referrerCommission": 0,
+    "initial": 800,
+    "referrerDiscount": 50,
+    "referrerCommission": 80,
     "labAdjustment": 0,
-    "final": 200,
-    "net": 200,
-    "paid": 200
+    "final": 750,
+    "net": 670,
+    "paid": 500
   }
 }
 
-###
+### ── POST /invoice/add (no referrer) ────────────────────────────────────────
 
-### POST create invoice (invalid — missing patient — expect 400)
 POST {{baseUrl}}/invoice/add
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
 
 {
+  "patient": {
+    "name": "Jane Doe",
+    "gender": "female",
+    "age": 28,
+    "contactNumber": "01798765432"
+  },
   "tests": [
     {
-      "testId": "69a70b8c2c76412ea1978d16",
-      "name": "CBC",
-      "price": 300
+      "testId": "507f1f77bcf86cd799439012",
+      "name": "Complete Blood Count",
+      "price": 500,
+      "schemaId": null
     }
   ],
   "amount": {
-    "initial": 300,
+    "initial": 500,
     "referrerDiscount": 0,
     "referrerCommission": 0,
     "labAdjustment": 0,
-    "final": 300,
-    "net": 300,
-    "paid": 0
+    "final": 500,
+    "net": 500,
+    "paid": 500
   }
 }
 
-###
+### ── POST /invoice/add (paid > final — should fail 400) ─────────────────────
 
-### POST create invoice (invalid — empty tests array — expect 400)
 POST {{baseUrl}}/invoice/add
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
 
 {
   "patient": {
-    "name": "Test User",
+    "name": "Test Patient",
     "gender": "male",
-    "age": 30,
+    "age": 40,
     "contactNumber": "01700000000"
   },
-  "tests": [],
+  "tests": [
+    {
+      "testId": "507f1f77bcf86cd799439012",
+      "name": "Complete Blood Count",
+      "price": 500,
+      "schemaId": null
+    }
+  ],
   "amount": {
-    "initial": 0,
+    "initial": 500,
     "referrerDiscount": 0,
     "referrerCommission": 0,
     "labAdjustment": 0,
-    "final": 0,
-    "net": 0,
-    "paid": 0
+    "final": 500,
+    "net": 500,
+    "paid": 999
   }
 }
 
-###
+### ── PATCH /invoice/:invoiceId/collect-due ──────────────────────────────────
 
-### GET all invoices (default limit 20)
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/collect-due
+Authorization: Bearer {{token}}
+
+### ── GET /invoice/all ────────────────────────────────────────────────────────
+
 GET {{baseUrl}}/invoice/all
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/all (with pagination) ─────────────────────────────────────
 
-### GET all invoices (custom limit)
-GET {{baseUrl}}/invoice/all?limit=10
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/all?limit=20&cursor=1748000000000
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/all (with date range) ─────────────────────────────────────
 
-### GET all invoices (with date range)
-GET {{baseUrl}}/invoice/all?startDate=1773000000000&endDate=1773999999999&limit=20
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/all?startDate=1745000000000&endDate=1748000000000
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/all (date range + pagination) ─────────────────────────────
 
-### GET all invoices (next page with cursor)
-GET {{baseUrl}}/invoice/all?limit=20&cursor=1773816911298
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/all?startDate=1745000000000&endDate=1748000000000&limit=20&cursor=1747000000000
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/deleted ────────────────────────────────────────────────────
 
-### GET all invoices (date range + cursor)
-GET {{baseUrl}}/invoice/all?startDate=1773000000000&endDate=1773999999999&limit=20&cursor=1773816911298
-Content-Type: {{contentType}}
-
-###
-
-### GET deleted invoices (default limit 20)
 GET {{baseUrl}}/invoice/deleted
-Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/deleted (with date range) ─────────────────────────────────
 
-### GET deleted invoices (with date range)
-GET {{baseUrl}}/invoice/deleted?startDate=1773000000000&endDate=1773999999999&limit=20
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/deleted?startDate=1745000000000&endDate=1748000000000
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/:invoiceId ─────────────────────────────────────────────────
 
-### GET deleted invoices (next page with cursor)
-GET {{baseUrl}}/invoice/deleted?limit=20&cursor=1773816911298
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/{{invoiceId}}
+Authorization: Bearer {{token}}
 
-###
+### ── GET /invoice/:invoiceId/report-summary ─────────────────────────────────
 
-### GET single invoice
-GET {{baseUrl}}/invoice/BAQ6318
-Content-Type: {{contentType}}
+GET {{baseUrl}}/invoice/{{invoiceId}}/report-summary
+Authorization: Bearer {{token}}
 
-###
+### ── PATCH /invoice/:invoiceId/patient-info ─────────────────────────────────
 
-### GET single invoice (invalid format — expect 400)
-GET {{baseUrl}}/invoice/invalid-id
-Content-Type: {{contentType}}
-
-###
-
-### GET single invoice (valid format, not found — expect 404)
-GET {{baseUrl}}/invoice/ZZZ9999
-Content-Type: {{contentType}}
-
-###
-
-### GET invoice report summary
-GET {{baseUrl}}/invoice/BAQ6318/report-summary
-Content-Type: {{contentType}}
-
-###
-
-### PATCH update patient info
-PATCH {{baseUrl}}/invoice/BAQ6318/patient-info
-Content-Type: {{contentType}}
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/patient-info
+Authorization: Bearer {{token}}
+Content-Type: application/json
 
 {
   "patient": {
-    "name": "Samiul Updated",
+    "name": "John Doe Updated",
     "gender": "male",
-    "age": 24,
-    "contactNumber": "01712345678"
+    "age": 36,
+    "contactNumber": "01712345999"
   }
 }
 
-###
+### ── PATCH /invoice/:invoiceId/mark-delivered ───────────────────────────────
 
-### PATCH update patient info (invalid gender — expect 400)
-PATCH {{baseUrl}}/invoice/BAQ6318/patient-info
-Content-Type: {{contentType}}
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/mark-delivered
+Authorization: Bearer {{token}}
+
+### ── PATCH /invoice/:invoiceId/delete ───────────────────────────────────────
+
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/delete
+Authorization: Bearer {{token}}
+
+### ── Edge Cases ──────────────────────────────────────────────────────────────
+
+### collect-due on already paid invoice (should fail 400)
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/collect-due
+Authorization: Bearer {{token}}
+
+### mark-delivered on already delivered invoice (should fail 400)
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/mark-delivered
+Authorization: Bearer {{token}}
+
+### delete already deleted invoice (should fail 400)
+PATCH {{baseUrl}}/invoice/{{invoiceId}}/delete
+Authorization: Bearer {{token}}
+
+### invalid invoiceId format (should fail 422)
+GET {{baseUrl}}/invoice/INVALID123
+Authorization: Bearer {{token}}
+
+### missing required fields in body (should fail 422)
+POST {{baseUrl}}/invoice/add
+Authorization: Bearer {{token}}
+Content-Type: application/json
 
 {
   "patient": {
-    "name": "Samiul Updated",
-    "gender": "other",
-    "age": 24,
-    "contactNumber": "01712345678"
+    "name": "Missing Fields"
   }
 }
-
-###
-
-### PATCH collect due amount
-PATCH {{baseUrl}}/invoice/BAQ6318/collect-due
-
-
-###
-
-### PATCH mark as delivered
-PATCH {{baseUrl}}/invoice/BAQ6318/mark-delivered
-
-
-###
-
-### PATCH soft delete invoice
-PATCH {{baseUrl}}/invoice/BAQ6318/delete
-
-
-###
-
-### PATCH soft delete invoice (already deleted — expect 400)
-PATCH {{baseUrl}}/invoice/BAQ6318/delete

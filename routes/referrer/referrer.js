@@ -1,98 +1,238 @@
-import { ObjectId } from "mongodb";
+import toObjectId from "../../utils/db.js";
 
 const collectionName = "referrers";
 
-const referrerBodySchema = {
-  type: "object",
-  required: ["name", "contactNumber", "type", "commissionType", "commissionValue"],
-  properties: {
-    name: { type: "string", minLength: 1, maxLength: 100 },
-    contactNumber: { type: "string", minLength: 1, maxLength: 15 },
-    degree: { type: "string", maxLength: 200 },
-    details: { type: "string", maxLength: 500 },
-    type: { type: "string", enum: ["doctor", "agent", "institute"] },
-    commissionType: { type: "string", enum: ["percentage", "fixed"] },
-    commissionValue: { type: "number", minimum: 0 },
-    isActive: { type: "boolean" },
-  },
-  additionalProperties: true,
+// ─── Reusable Schema Fragments ────────────────────────────────────────────────
+
+const objectIdSchema = {
+  type: "string",
+  minLength: 24,
+  maxLength: 24,
+  description: "MongoDB ObjectId (24-character hex string)",
 };
 
-const isValidObjectId = (id) => ObjectId.isValid(id) && String(new ObjectId(id)) === id;
+const referrerIdParamSchema = {
+  type: "object",
+  required: ["id"],
+  properties: {
+    id: { ...objectIdSchema, description: "ObjectId of the referrer" },
+  },
+};
+
+// ─── Body Properties ──────────────────────────────────────────────────────────
+
+const referrerBodyProperties = {
+  name: { type: "string", minLength: 1, maxLength: 100, description: "Full name of the referrer" },
+  contactNumber: { type: "string", minLength: 1, maxLength: 15, description: "Phone/contact number" },
+  degree: { type: "string", maxLength: 200, description: "Degree or qualification (optional)" },
+  details: { type: "string", maxLength: 500, description: "Additional details (optional)" },
+  type: { type: "string", enum: ["doctor", "agent", "institute"], description: "Type of referrer" },
+  commissionType: { type: "string", enum: ["percentage", "fixed"], description: "How commission is calculated" },
+  commissionValue: { type: "number", minimum: 0, description: "Commission amount (max 100 if percentage)" },
+  isActive: { type: "boolean", description: "Whether the referrer is active (defaults to true)" },
+};
+
+// ─── Route Schemas ────────────────────────────────────────────────────────────
+
+const getAllReferrersSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Get all referrers for the lab",
+  },
+};
+
+const getReferrerByIdSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Get a single referrer by ID",
+    params: referrerIdParamSchema,
+  },
+};
+
+const createReferrerSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Add a new referrer to the lab",
+    body: {
+      type: "object",
+      required: ["name", "contactNumber", "type", "commissionType", "commissionValue"],
+      additionalProperties: false,
+      properties: referrerBodyProperties,
+    },
+  },
+};
+
+const updateReferrerSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Update an existing referrer",
+    params: referrerIdParamSchema,
+    body: {
+      type: "object",
+      required: [],
+      additionalProperties: false,
+      minProperties: 1,
+      description: "At least one field must be provided",
+      properties: referrerBodyProperties,
+    },
+  },
+};
+
+const deactivateReferrerSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Deactivate a referrer",
+    params: referrerIdParamSchema,
+  },
+};
+
+const activateReferrerSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Activate a referrer",
+    params: referrerIdParamSchema,
+  },
+};
+
+const deleteReferrerSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Hard delete a referrer",
+    params: referrerIdParamSchema,
+  },
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function routes(fastify, options) {
   const collection = fastify.mongo.db.collection(collectionName);
+  const labId = (req) => toObjectId(req.user.labId);
 
-  fastify.get("/referrers", async (req, reply) => {
-    return collection.find({}).sort({ name: 1 }).toArray();
-  });
+  fastify.addHook("onRequest", fastify.authenticate);
 
-  fastify.get("/referrer/:id", async (req, reply) => {
-    if (!isValidObjectId(req.params.id)) {
-      return reply.code(400).send({ error: "Invalid referrer ID" });
+  // ── GET /referrers ────────────────────────────────────────────────────────
+  fastify.get("/referrers", getAllReferrersSchema, async (req, reply) => {
+    try {
+      return collection
+        .find({ labId: labId(req) })
+        .sort({ name: 1 })
+        .toArray();
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch referrers" });
     }
-    const referrer = await collection.findOne({ _id: new ObjectId(req.params.id) });
-    if (!referrer) return reply.code(404).send({ error: "Referrer not found" });
-    return referrer;
   });
 
-  fastify.post("/referrer/add", { schema: { body: referrerBodySchema } }, async (req, reply) => {
-    const { formType, _id, ...data } = req.body;
+  // ── GET /referrer/:id ─────────────────────────────────────────────────────
+  fastify.get("/referrer/:id", getReferrerByIdSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
 
-    if (data.commissionType === "percentage" && data.commissionValue > 100) {
-      return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
+      const referrer = await collection.findOne({ _id, labId: labId(req) });
+      if (!referrer) return reply.code(404).send({ error: "Referrer not found" });
+      return referrer;
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch referrer" });
     }
-
-    const result = await collection.insertOne({ ...data, isActive: data.isActive ?? true });
-    return reply.code(201).send({ _id: result.insertedId });
   });
 
-  fastify.put(
-    "/referrer/edit/:id",
-    { schema: { body: { ...referrerBodySchema, required: [] } } },
-    async (req, reply) => {
-      if (!isValidObjectId(req.params.id)) {
-        return reply.code(400).send({ error: "Invalid referrer ID" });
-      }
-
+  // ── POST /referrer/add ────────────────────────────────────────────────────
+  fastify.post("/referrer/add", createReferrerSchema, async (req, reply) => {
+    try {
       const { formType, _id, ...data } = req.body;
 
       if (data.commissionType === "percentage" && data.commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
       }
 
-      const result = await collection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: data });
+      const result = await collection.insertOne({
+        ...data,
+        labId: labId(req),
+        isActive: data.isActive ?? true,
+        created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+      });
+      return reply.code(201).send({ _id: result.insertedId });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to create referrer" });
+    }
+  });
+
+  // ── PUT /referrer/edit/:id ────────────────────────────────────────────────
+  fastify.put("/referrer/edit/:id", updateReferrerSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
+
+      const { formType, _id: bodyId, ...data } = req.body;
+
+      if (data.commissionType === "percentage" && data.commissionValue > 100) {
+        return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
+      }
+
+      data.updated = { at: Date.now(), by: { id: req.user.id, name: req.user.name } };
+
+      const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: data });
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
 
       return { message: "Referrer updated successfully" };
-    },
-  );
-
-  fastify.patch("/referrer/:id/deactivate", async (req, reply) => {
-    if (!isValidObjectId(req.params.id)) {
-      return reply.code(400).send({ error: "Invalid referrer ID" });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update referrer" });
     }
-    const result = await collection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { isActive: false } });
-    if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
-    return { message: "Referrer deactivated successfully", _id: req.params.id };
   });
 
-  fastify.patch("/referrer/:id/activate", async (req, reply) => {
-    if (!isValidObjectId(req.params.id)) {
-      return reply.code(400).send({ error: "Invalid referrer ID" });
+  // ── PATCH /referrer/:id/deactivate ────────────────────────────────────────
+  fastify.patch("/referrer/:id/deactivate", deactivateReferrerSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
+
+      const result = await collection.updateOne(
+        { _id, labId: labId(req) },
+        { $set: { isActive: false, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
+      return { message: "Referrer deactivated successfully", _id: req.params.id };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to deactivate referrer" });
     }
-    const result = await collection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { isActive: true } });
-    if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
-    return { message: "Referrer activated successfully", _id: req.params.id };
   });
 
-  fastify.delete("/referrer/:id", async (req, reply) => {
-    if (!isValidObjectId(req.params.id)) {
-      return reply.code(400).send({ error: "Invalid referrer ID" });
+  // ── PATCH /referrer/:id/activate ──────────────────────────────────────────
+  fastify.patch("/referrer/:id/activate", activateReferrerSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
+
+      const result = await collection.updateOne(
+        { _id, labId: labId(req) },
+        { $set: { isActive: true, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
+      return { message: "Referrer activated successfully", _id: req.params.id };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to activate referrer" });
     }
-    const result = await collection.deleteOne({ _id: new ObjectId(req.params.id) });
-    if (result.deletedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
-    return { message: "Referrer deleted successfully" };
+  });
+
+  // ── DELETE /referrer/:id ──────────────────────────────────────────────────
+  fastify.delete("/referrer/:id", deleteReferrerSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
+
+      const result = await collection.deleteOne({ _id, labId: labId(req) });
+      if (result.deletedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
+      return { message: "Referrer deleted successfully" };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to delete referrer" });
+    }
   });
 }
 

@@ -11,7 +11,7 @@ import authPlugin from "./plugins/auth.js";
 import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
-import labTestRoutes from "./routes/labTest/labTest.js";
+import testRoutes from "./routes/test/test.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
@@ -95,7 +95,7 @@ fastify.register(cashmemoRoutes, { prefix: API });
 fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
 fastify.register(staffRoutes, { prefix: API });
-fastify.register(labTestRoutes, { prefix: API });
+fastify.register(testRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 

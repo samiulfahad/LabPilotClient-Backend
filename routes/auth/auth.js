@@ -68,6 +68,7 @@ async function authRoutes(fastify) {
 
     const payload = {
       id: staff._id.toString(),
+      name: staff.name,
       role: staff.role,
       permissions: staff.permissions,
       labKey: staff.labKey,
@@ -119,6 +120,7 @@ async function authRoutes(fastify) {
 
     const payload = {
       id: decoded.id,
+      name: decoded.name,
       role: decoded.role,
       permissions: decoded.permissions,
       labKey: decoded.labKey,

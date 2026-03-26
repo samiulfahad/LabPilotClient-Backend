@@ -1,42 +1,50 @@
-// cashmemo.routes.js
+import toObjectId from "../../utils/db.js";
+
+// ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const summaryQuerySchema = {
   schema: {
+    tags: ["Cashmemo"],
+    summary: "Get cash memo summary for a date range",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
       properties: {
-        startDate: { type: "integer" },
-        endDate: { type: "integer" },
+        startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
+        endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
       },
     },
   },
 };
 
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
 async function routes(fastify) {
+  const col = () => fastify.mongo.db.collection("invoices");
+  const labId = (req) => toObjectId(req.user.labId);
+
+  fastify.addHook("onRequest", fastify.authenticate);
+
   // ── GET /cashmemo/summary ─────────────────────────────────────────────────
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
-    const { startDate, endDate } = req.query;
-
-    if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
-
-    const labId = 123456; // TODO: req.user.labId
-
     try {
-      const [result] = await fastify.mongo.db
-        .collection("invoices")
+      const { startDate, endDate } = req.query;
+
+      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+
+      const [result] = await col()
         .aggregate(
           [
             {
               $match: {
-                labId,
+                labId: labId(req),
                 createdAt: { $gte: startDate, $lte: endDate },
               },
             },
             {
               $facet: {
                 active: [
-                  { $match: { isDeleted: false } },
+                  { $match: { "deletion.status": false } },
                   {
                     $group: {
                       _id: null,
@@ -49,7 +57,7 @@ async function routes(fastify) {
                       totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                       totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
                       deliveredCount: {
-                        $sum: { $cond: [{ $eq: ["$isDelivered", true] }, 1, 0] },
+                        $sum: { $cond: [{ $eq: ["$delivery.status", true] }, 1, 0] },
                       },
                       fullyPaidCount: {
                         $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
@@ -73,9 +81,9 @@ async function routes(fastify) {
                     },
                   },
                 ],
-                deleted: [{ $match: { isDeleted: true } }, { $count: "deletedCount" }],
+                deleted: [{ $match: { "deletion.status": true } }, { $count: "deletedCount" }],
                 testCounts: [
-                  { $match: { isDeleted: false } },
+                  { $match: { "deletion.status": false } },
                   { $unwind: "$tests" },
                   { $group: { _id: "$tests.name", count: { $sum: 1 } } },
                   { $sort: { count: -1 } },
@@ -85,7 +93,7 @@ async function routes(fastify) {
               },
             },
           ],
-          { hint: "idx_labId_createdAt_isDeleted", allowDiskUse: true },
+          { allowDiskUse: true },
         )
         .toArray();
 
