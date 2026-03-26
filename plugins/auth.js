@@ -55,7 +55,7 @@ async function authPlugin(fastify) {
     httpOnly: true,
     path: "/",
     sameSite: "none",
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
   });
 
   await Promise.all([
