@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
+import toObjectId from "../../utils/db.js";
 
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
@@ -74,6 +75,20 @@ async function authRoutes(fastify) {
       labId: staff.labId, // ✅ consistent key
     };
 
+    const lab = await fastify.mongo.db.collection("labs").findOne(
+      { _id: toObjectId(staff.labId) },
+      {
+        projection: {
+          name: 1,
+          labKey: 1,
+          "contact.primary": 1,
+          "contact.address": 1,
+          "contact.district": 1,
+        },
+      },
+    );
+    // console.log(lab);
+
     const deviceId = randomUUID();
     const accessToken = await reply.jwtSign(payload);
 
@@ -100,7 +115,7 @@ async function authRoutes(fastify) {
       .setCookie("refreshToken", refreshTokenPlain, fastify.cookieOptions)
       .setCookie("deviceId", deviceId, fastify.cookieOptions);
 
-    return { accessToken };
+    return { accessToken, lab };
   });
 
   // ── POST /refresh ─────────────────────────────────────────────────────────
