@@ -55,7 +55,7 @@ await fastify.register(mongodb, {
 });
 
 // ── 3a. Normalize ObjectIds in all responses
-await fastify.register(serializerPlugin); 
+// await fastify.register(serializerPlugin); 
 
 // ── 4. Ensure DB indexes
 try {

@@ -88,7 +88,7 @@ const createTestSchema = {
     summary: "Create a new test for the lab",
     body: {
       type: "object",
-      required: ["name"],
+      required: ["name", "testId"],
       additionalProperties: false,
       properties: {
         name: {
@@ -96,7 +96,11 @@ const createTestSchema = {
           minLength: 2,
           maxLength: 500,
           pattern: "^[a-zA-Z0-9\\s\\-_().]+$",
-          description: "Name of the test (alphanumeric, spaces, and - _ ( ) . allowed)",
+          description: "Name of the test",
+        },
+        testId: {
+          ...objectIdSchema,
+          description: "ObjectId of the global catalog test",
         },
         categoryId: {
           ...objectIdSchema,
@@ -252,16 +256,17 @@ async function testRoutes(fastify) {
   // ── POST /test ────────────────────────────────────────────────────────────
   fastify.post("/test", createTestSchema, async (req, reply) => {
     try {
-      const { name, categoryId, schemaId, price } = req.body;
+      const { name, testId, categoryId, schemaId, price } = req.body;
 
-      const existing = await col().findOne({ name: name.trim(), labId: labId(req) });
-      if (existing) return reply.code(400).send({ error: "Test name already exists" });
+      const existing = await col().findOne({ labId: labId(req), testId });
+      if (existing) return reply.code(409).send({ error: "Test already registered" });
 
       const doc = {
         labId: labId(req),
         name: name.trim(),
-        categoryId: categoryId ? toObjectId(categoryId) : null, // ← ObjectId or null
-        schemaId: schemaId ? toObjectId(schemaId) : null, // ← ObjectId or null
+        testId, // ← plain string reference to catalog _id
+        categoryId: categoryId ? toObjectId(categoryId) : null,
+        schemaId: schemaId ? toObjectId(schemaId) : null,
         price: price ?? 0,
         createdAt: Date.now(),
       };
@@ -284,7 +289,7 @@ async function testRoutes(fastify) {
 
       const update = {};
       if (price !== undefined) update.price = price;
-      if (schemaId !== undefined) update.schemaId = schemaId ? toObjectId(schemaId) : null; // ← ObjectId or null
+      if (schemaId !== undefined) update.schemaId = schemaId ? toObjectId(schemaId) : null;
       update.updated = { at: Date.now(), by: { id: req.user.id, name: req.user.name } };
 
       const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });

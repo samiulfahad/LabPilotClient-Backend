@@ -65,7 +65,6 @@ async function authRoutes(fastify) {
     if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.isDeleted || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
-
     const payload = {
       id: staff._id.toString(),
       name: staff.name,
