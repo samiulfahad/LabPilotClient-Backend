@@ -203,6 +203,7 @@ const patientInfoSchema = {
 async function invoiceRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
+  const userId = (req) => toObjectId(req.user.id); // ← helper to avoid repetition
 
   fastify.addHook("onRequest", fastify.authenticate);
 
@@ -275,16 +276,16 @@ async function invoiceRoutes(fastify) {
         },
         referrer: referrer
           ? {
-              id: referrer.id ? toObjectId(referrer.id) : null, // ← stored as ObjectId or null
+              id: referrer.id ? toObjectId(referrer.id) : null,
               name: referrer.name ?? null,
               type: referrer.type ?? null,
             }
           : { id: null, name: null, type: null },
         tests: tests.map((t) => ({
-          testId: toObjectId(t.testId), // ← stored as ObjectId
+          testId: toObjectId(t.testId),
           name: t.name,
           price: t.price,
-          schemaId: t.schemaId ? toObjectId(t.schemaId) : null, // ← stored as ObjectId or null
+          schemaId: t.schemaId ? toObjectId(t.schemaId) : null,
           ...(t.schemaId && { report: {}, isCompleted: false }),
         })),
         amount: {
@@ -297,16 +298,16 @@ async function invoiceRoutes(fastify) {
           paid: amount.paid,
         },
         createdBy: {
-          id: req.user.id,
+          id: userId(req), // ← fixed
           name: req.user.name,
         },
         delivery: {
           status: false,
-          by: { id: req.user.id, name: req.user.name },
+          by: { id: userId(req), name: req.user.name }, // ← fixed
         },
         collections: [
           {
-            by: { id: req.user.id, name: req.user.name },
+            by: { id: userId(req), name: req.user.name }, // ← fixed
             amount: amount.paid,
             at: Date.now(),
           },
@@ -357,7 +358,7 @@ async function invoiceRoutes(fastify) {
             $set: { "amount.paid": invoice.amount.final },
             $push: {
               collections: {
-                by: { id: req.user.id, name: req.user.name },
+                by: { id: userId(req), name: req.user.name }, // ← fixed
                 amount: due,
                 at: Date.now(),
               },
@@ -558,7 +559,7 @@ async function invoiceRoutes(fastify) {
         },
         updated: {
           at: Date.now(),
-          by: { id: req.user.id, name: req.user.name },
+          by: { id: userId(req), name: req.user.name }, // ← fixed
         },
       };
 
@@ -594,7 +595,7 @@ async function invoiceRoutes(fastify) {
             $set: {
               delivery: {
                 status: true,
-                by: { id: req.user.id, name: req.user.name },
+                by: { id: userId(req), name: req.user.name }, // ← fixed
               },
             },
           },
@@ -633,7 +634,7 @@ async function invoiceRoutes(fastify) {
               deletion: {
                 status: true,
                 at: Date.now(),
-                by: { id: req.user.id, name: req.user.name },
+                by: { id: userId(req), name: req.user.name }, // ← fixed
               },
             },
           },
