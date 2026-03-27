@@ -6,8 +6,10 @@ import swaggerUi from "@fastify/swagger-ui";
 import fastifyCookie from "@fastify/cookie";
 import dotenv from "dotenv";
 
-import { ensureIndexes } from "./db/indexes.js";
 import authPlugin from "./plugins/auth.js";
+import { ensureIndexes } from "./db/indexes.js";
+import serializerPlugin from "./plugins/serializer.js";
+
 import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
@@ -51,6 +53,9 @@ await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
+
+// ── 3a. Normalize ObjectIds in all responses
+await fastify.register(serializerPlugin); 
 
 // ── 4. Ensure DB indexes
 try {
