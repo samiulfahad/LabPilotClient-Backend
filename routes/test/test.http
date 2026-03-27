@@ -1,6 +1,6 @@
 ### Lab Test Management API - REST Client
 ### Base URL
-@baseUrl = http://localhost:5000/api/v1
+@baseUrl = http://localhost:3000/api/v1
 @contentType = application/json
 
 ### 1. GET All Tests

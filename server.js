@@ -102,7 +102,7 @@ fastify.register(reportRoutes, { prefix: API });
 fastify.get("/", (req, reply) => reply.send("Ok"));
 
 try {
-  await fastify.listen({ port: process.env.PORT || 5000, host: "0.0.0.0" });
+  await fastify.listen({ port: process.env.PORT || 3000, host: "0.0.0.0" });
 } catch (err) {
   fastify.log.error(err);
   process.exit(1);

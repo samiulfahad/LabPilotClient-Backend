@@ -141,16 +141,22 @@ async function referrerRoutes(fastify, options) {
   // ── POST /referrer/add ────────────────────────────────────────────────────
   fastify.post("/referrer/add", createReferrerSchema, async (req, reply) => {
     try {
-      const { formType, _id, ...data } = req.body;
+      const { name, contactNumber, degree, details, type, commissionType, commissionValue, isActive } = req.body;
 
-      if (data.commissionType === "percentage" && data.commissionValue > 100) {
+      if (commissionType === "percentage" && commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
       }
 
       const result = await collection.insertOne({
-        ...data,
         labId: labId(req),
-        isActive: data.isActive ?? true,
+        name,
+        contactNumber,
+        degree,
+        details,
+        type,
+        commissionType,
+        commissionValue,
+        isActive: isActive ?? true,
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
       return reply.code(201).send({ _id: result.insertedId });
@@ -166,15 +172,25 @@ async function referrerRoutes(fastify, options) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
 
-      const { formType, _id: bodyId, ...data } = req.body;
+      const { name, contactNumber, degree, details, type, commissionType, commissionValue, isActive } = req.body;
 
-      if (data.commissionType === "percentage" && data.commissionValue > 100) {
+      if (commissionType === "percentage" && commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
       }
 
-      data.updated = { at: Date.now(), by: { id: req.user.id, name: req.user.name } };
+      const updateData = {
+        ...(name !== undefined && { name }),
+        ...(contactNumber !== undefined && { contactNumber }),
+        ...(degree !== undefined && { degree }),
+        ...(details !== undefined && { details }),
+        ...(type !== undefined && { type }),
+        ...(commissionType !== undefined && { commissionType }),
+        ...(commissionValue !== undefined && { commissionValue }),
+        ...(isActive !== undefined && { isActive }),
+        updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+      };
 
-      const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: data });
+      const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: updateData });
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
 
       return { message: "Referrer updated successfully" };

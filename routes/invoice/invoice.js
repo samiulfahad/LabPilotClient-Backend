@@ -273,12 +273,18 @@ async function invoiceRoutes(fastify) {
           age: patient.age,
           contactNumber: patient.contactNumber,
         },
-        referrer: referrer ?? { id: null, name: null, type: null },
+        referrer: referrer
+          ? {
+              id: referrer.id ? toObjectId(referrer.id) : null, // ← stored as ObjectId or null
+              name: referrer.name ?? null,
+              type: referrer.type ?? null,
+            }
+          : { id: null, name: null, type: null },
         tests: tests.map((t) => ({
-          testId: toObjectId(t.testId),
+          testId: toObjectId(t.testId), // ← stored as ObjectId
           name: t.name,
           price: t.price,
-          schemaId: toObjectId(t.schemaId),
+          schemaId: t.schemaId ? toObjectId(t.schemaId) : null, // ← stored as ObjectId or null
           ...(t.schemaId && { report: {}, isCompleted: false }),
         })),
         amount: {
@@ -296,10 +302,7 @@ async function invoiceRoutes(fastify) {
         },
         delivery: {
           status: false,
-          by: {
-            id: req.user.id,
-            name: req.user.name,
-          },
+          by: { id: req.user.id, name: req.user.name },
         },
         collections: [
           {

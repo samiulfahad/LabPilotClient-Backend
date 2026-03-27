@@ -222,10 +222,10 @@ async function testRoutes(fastify) {
   // ── GET /test/:testId ─────────────────────────────────────────────────────
   fastify.get("/test/:testId", getTestByIdSchema, async (req, reply) => {
     try {
-      const testId = toObjectId(req.params.testId);
-      if (!testId) return reply.code(400).send({ error: "Invalid test ID" });
+      const _id = toObjectId(req.params.testId);
+      if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
 
-      const test = await col().findOne({ testId, labId: labId(req) });
+      const test = await col().findOne({ _id, labId: labId(req) });
       if (!test) return reply.code(404).send({ error: "Test not found" });
       return reply.send(test);
     } catch (err) {
@@ -260,8 +260,8 @@ async function testRoutes(fastify) {
       const doc = {
         labId: labId(req),
         name: name.trim(),
-        categoryId: toObjectId(categoryId),
-        schemaId: toObjectId(schemaId),
+        categoryId: categoryId ? toObjectId(categoryId) : null, // ← ObjectId or null
+        schemaId: schemaId ? toObjectId(schemaId) : null, // ← ObjectId or null
         price: price ?? 0,
         createdAt: Date.now(),
       };
@@ -277,20 +277,20 @@ async function testRoutes(fastify) {
   // ── PATCH /test/:testId ───────────────────────────────────────────────────
   fastify.patch("/test/:testId", updateTestSchema, async (req, reply) => {
     try {
-      const testId = toObjectId(req.params.testId);
-      if (!testId) return reply.code(400).send({ error: "Invalid test ID" });
+      const _id = toObjectId(req.params.testId);
+      if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
 
       const { price, schemaId } = req.body;
 
       const update = {};
       if (price !== undefined) update.price = price;
-      if (schemaId !== undefined) update.schemaId = toObjectId(schemaId);
+      if (schemaId !== undefined) update.schemaId = schemaId ? toObjectId(schemaId) : null; // ← ObjectId or null
       update.updated = { at: Date.now(), by: { id: req.user.id, name: req.user.name } };
 
-      const result = await col().updateOne({ testId, labId: labId(req) }, { $set: update });
+      const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Test not found" });
 
-      const updated = await col().findOne({ testId, labId: labId(req) });
+      const updated = await col().findOne({ _id, labId: labId(req) });
       return reply.send(updated);
     } catch (err) {
       req.log.error(err);
@@ -301,10 +301,10 @@ async function testRoutes(fastify) {
   // ── DELETE /test/:testId ──────────────────────────────────────────────────
   fastify.delete("/test/:testId", deleteTestSchema, async (req, reply) => {
     try {
-      const testId = toObjectId(req.params.testId);
-      if (!testId) return reply.code(400).send({ error: "Invalid test ID" });
+      const _id = toObjectId(req.params.testId);
+      if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
 
-      const result = await col().deleteOne({ testId, labId: labId(req) });
+      const result = await col().deleteOne({ _id, labId: labId(req) });
       if (result.deletedCount === 0) return reply.code(404).send({ error: "Test not found" });
       return reply.send({ success: true });
     } catch (err) {

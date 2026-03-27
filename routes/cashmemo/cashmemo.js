@@ -28,7 +28,8 @@ async function cashmemoRoutes(fastify) {
   // ── GET /cashmemo/summary ─────────────────────────────────────────────────
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
     try {
-      const { startDate, endDate } = req.query;
+      const startDate = parseInt(req.query.startDate);
+      const endDate   = parseInt(req.query.endDate);
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 

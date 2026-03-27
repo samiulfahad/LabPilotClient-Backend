@@ -39,9 +39,8 @@ const permissionsSchema = {
 
 const staffBodyProperties = {
   name: { type: "string", minLength: 1, maxLength: 100, description: "Full name" },
-  username: { type: "string", minLength: 3, maxLength: 30, description: "Unique username" },
   email: { type: "string", minLength: 5, maxLength: 254, description: "Unique email address" },
-  mobileNumber: { type: "string", minLength: 10, maxLength: 15, description: "Unique mobile number" },
+  phone: { type: "string", minLength: 10, maxLength: 15, description: "Unique phone number" },
   permissions: permissionsSchema,
   isActive: { type: "boolean", description: "Whether the staff member is active (defaults to true)" },
 };
@@ -69,7 +68,7 @@ const createStaffSchema = {
     summary: "Add a new staff member to the lab",
     body: {
       type: "object",
-      required: ["name", "username", "email", "mobileNumber", "permissions"],
+      required: ["name", "email", "phone", "permissions"],
       additionalProperties: false,
       properties: staffBodyProperties,
     },
@@ -111,7 +110,7 @@ const activateStaffSchema = {
 const deleteStaffSchema = {
   schema: {
     tags: ["Staff"],
-    summary: "Hard delete a staff member",
+    summary: "Soft delete a staff member",
     params: staffIdParamSchema,
   },
 };
@@ -136,7 +135,7 @@ async function staffRoutes(fastify, options) {
   fastify.addHook("onRequest", fastify.authenticate);
 
   const checkDuplicate = async (field, value, excludeId = null) => {
-    const query = { [field]: value };
+    const query = { [field]: value, "deletion.status": { $ne: true } };
     if (excludeId) query._id = { $ne: toObjectId(excludeId) };
     return collection.findOne(query, { projection: { _id: 1 } });
   };
@@ -146,8 +145,8 @@ async function staffRoutes(fastify, options) {
     try {
       return collection
         .find(
-          { labId: labId(req) },
-          { projection: { name: 1, username: 1, email: 1, mobileNumber: 1, permissions: 1, isActive: 1 } },
+          { labId: labId(req), "deletion.status": { $ne: true } },
+          { projection: { name: 1, email: 1, phone: 1, permissions: 1, isActive: 1, deletion: 1 } },
         )
         .sort({ name: 1 })
         .toArray();
@@ -163,7 +162,11 @@ async function staffRoutes(fastify, options) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
-      const staffMember = await collection.findOne({ _id, labId: labId(req) });
+      const staffMember = await collection.findOne({
+        _id,
+        labId: labId(req),
+        "deletion.status": { $ne: true },
+      });
       if (!staffMember) return reply.code(404).send({ error: "Staff not found" });
       return staffMember;
     } catch (err) {
@@ -175,34 +178,29 @@ async function staffRoutes(fastify, options) {
   // ── POST /staff/add ───────────────────────────────────────────────────────
   fastify.post("/staff/add", createStaffSchema, async (req, reply) => {
     try {
-      const { type, _id, ...data } = req.body;
+      const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
 
-      const email = data.email.toLowerCase().trim();
-      const username = data.username.toLowerCase().trim();
-      const mobile = data.mobileNumber.trim();
-      const name = data.name.trim();
+      const email = rawEmail.toLowerCase().trim();
+      const phone = rawPhone.trim();
 
       if (!EMAIL_REGEX.test(email)) {
         return reply.code(400).send({ error: "Invalid email format" });
       }
-      if (await checkDuplicate("username", username)) {
-        return reply.code(400).send({ error: "Username already exists" });
-      }
       if (await checkDuplicate("email", email)) {
         return reply.code(400).send({ error: "Email already exists" });
       }
-      if (await checkDuplicate("mobileNumber", mobile)) {
-        return reply.code(400).send({ error: "Mobile number already exists" });
+      if (await checkDuplicate("phone", phone)) {
+        return reply.code(400).send({ error: "Phone number already exists" });
       }
 
       const result = await collection.insertOne({
         labId: labId(req),
-        name,
-        username,
+        name: name.trim(),
         email,
-        mobileNumber: mobile,
-        permissions: normalizePermissions(data.permissions),
-        isActive: data.isActive ?? true,
+        phone,
+        permissions: normalizePermissions(permissions),
+        isActive: isActive ?? true,
+        deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
 
@@ -219,40 +217,36 @@ async function staffRoutes(fastify, options) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
-      const { id } = req.params;
-      const { type, _id: bodyId, ...data } = req.body;
+      const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
 
-      const email = data.email?.toLowerCase().trim();
-      const username = data.username?.toLowerCase().trim();
-      const mobile = data.mobileNumber?.trim();
-      const name = data.name?.trim();
+      const email = rawEmail?.toLowerCase().trim();
+      const phone = rawPhone?.trim();
 
       if (email) {
         if (!EMAIL_REGEX.test(email)) {
           return reply.code(400).send({ error: "Invalid email format" });
         }
-        if (await checkDuplicate("email", email, id)) {
+        if (await checkDuplicate("email", email, req.params.id)) {
           return reply.code(400).send({ error: "Email already exists" });
         }
       }
-      if (username && (await checkDuplicate("username", username, id))) {
-        return reply.code(400).send({ error: "Username already exists" });
-      }
-      if (mobile && (await checkDuplicate("mobileNumber", mobile, id))) {
-        return reply.code(400).send({ error: "Mobile number already exists" });
+      if (phone && (await checkDuplicate("phone", phone, req.params.id))) {
+        return reply.code(400).send({ error: "Phone number already exists" });
       }
 
       const updateData = {
-        ...(name && { name }),
-        ...(username && { username }),
+        ...(name && { name: name.trim() }),
         ...(email && { email }),
-        ...(mobile && { mobileNumber: mobile }),
-        ...(data.permissions && { permissions: normalizePermissions(data.permissions) }),
-        ...(data.isActive !== undefined && { isActive: data.isActive }),
+        ...(phone && { phone }),
+        ...(permissions && { permissions: normalizePermissions(permissions) }),
+        ...(isActive !== undefined && { isActive }),
         updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       };
 
-      const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: updateData });
+      const result = await collection.updateOne(
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        { $set: updateData },
+      );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
 
       return { message: "Staff updated successfully" };
@@ -269,7 +263,7 @@ async function staffRoutes(fastify, options) {
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
       const result = await collection.updateOne(
-        { _id, labId: labId(req) },
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
         { $set: { isActive: false, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
@@ -287,7 +281,7 @@ async function staffRoutes(fastify, options) {
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
       const result = await collection.updateOne(
-        { _id, labId: labId(req) },
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
         { $set: { isActive: true, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
@@ -304,8 +298,19 @@ async function staffRoutes(fastify, options) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
-      const result = await collection.deleteOne({ _id, labId: labId(req) });
-      if (result.deletedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+      const result = await collection.updateOne(
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        {
+          $set: {
+            deletion: {
+              status: true,
+              at: Date.now(),
+              by: { id: req.user.id, name: req.user.name },
+            },
+          },
+        },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
       return { message: "Staff deleted successfully" };
     } catch (err) {
       req.log.error(err);
