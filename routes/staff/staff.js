@@ -1,6 +1,6 @@
 import toObjectId from "../../utils/db.js";
 
-const collectionName = "staff";
+const collectionName = "staffs";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
