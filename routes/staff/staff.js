@@ -97,6 +97,7 @@ const updateStaffSchema = {
         email: staffBodyProperties.email,
         permissions: staffBodyProperties.permissions,
         isActive: staffBodyProperties.isActive,
+        // phone and role are intentionally excluded
       },
     },
   },
@@ -157,7 +158,7 @@ async function staffRoutes(fastify, options) {
       return collection
         .find(
           { labId: labId(req), "deletion.status": { $ne: true } },
-          { projection: { name: 1, email: 1, phone: 1, permissions: 1, isActive: 1, deletion: 1 } },
+          { projection: { name: 1, email: 1, phone: 1, permissions: 1, isActive: 1, role: 1, deletion: 1 } },
         )
         .sort({ name: 1 })
         .toArray();
@@ -211,6 +212,7 @@ async function staffRoutes(fastify, options) {
         name: name.trim(),
         ...(email && { email }),
         phone,
+        role: "staff",
         permissions: normalizePermissions(permissions),
         isActive: isActive ?? true,
         deletion: { status: false, at: null, by: null },
