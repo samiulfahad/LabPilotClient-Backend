@@ -65,7 +65,7 @@ async function authPlugin(fastify) {
     tokensCollection().createIndex({ userId: 1, labId: 1 }),
     // OTP indexes — TTL auto-deletes expired OTPs, compound for fast lookup
     otpCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }), // ← auto-delete
-    otpCollection().createIndex({ phone: 1, labKey: 1 }), // ← fast lookup
+    otpCollection().createIndex({ phone: 1, labKey: 1 }),                     // ← fast lookup
   ]);
 }
 
