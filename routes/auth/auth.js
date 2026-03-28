@@ -112,24 +112,6 @@ async function authRoutes(fastify) {
       expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
     });
 
-    // Fire-and-forget login SMS notification
-    const now = new Date();
-    const time = now.toLocaleString("en-GB", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: "Asia/Dhaka",
-    });
-    fastify
-      .sendSMS({
-        number: staff.phone,
-        message: `${staff.name}, you logged into LabPilot at ${time}.`,
-      })
-      .catch((err) => fastify.log.error({ err }, "Login SMS failed"));
-
     reply
       .setCookie("refreshToken", refreshTokenPlain, fastify.cookieOptions)
       .setCookie("deviceId", deviceId, fastify.cookieOptions);
