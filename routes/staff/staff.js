@@ -39,7 +39,13 @@ const permissionsSchema = {
 
 const staffBodyProperties = {
   name: { type: "string", minLength: 1, maxLength: 100, description: "Full name" },
-  email: { type: "string", minLength: 5, maxLength: 254, description: "Unique email address" },
+  email: {
+    anyOf: [
+      { type: "string", minLength: 5, maxLength: 254 },
+      { type: "string", maxLength: 0 },
+    ],
+    description: "Unique email address (optional)",
+  },
   phone: { type: "string", minLength: 10, maxLength: 15, description: "Unique phone number" },
   permissions: permissionsSchema,
   isActive: { type: "boolean", description: "Whether the staff member is active (defaults to true)" },
@@ -180,7 +186,7 @@ async function staffRoutes(fastify, options) {
     try {
       const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
 
-      const email = rawEmail ? rawEmail.toLowerCase().trim() : null;
+      const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
       const phone = rawPhone.trim();
 
       if (email) {
