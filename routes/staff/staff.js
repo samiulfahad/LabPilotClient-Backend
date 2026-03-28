@@ -92,7 +92,12 @@ const updateStaffSchema = {
       additionalProperties: false,
       minProperties: 1,
       description: "At least one field must be provided",
-      properties: staffBodyProperties,
+      properties: {
+        name: staffBodyProperties.name,
+        email: staffBodyProperties.email,
+        permissions: staffBodyProperties.permissions,
+        isActive: staffBodyProperties.isActive,
+      },
     },
   },
 };
@@ -225,10 +230,9 @@ async function staffRoutes(fastify, options) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
 
-      const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
+      const { name, email: rawEmail, permissions, isActive } = req.body;
 
-      const email = rawEmail?.toLowerCase().trim() || null;
-      const phone = rawPhone?.trim();
+      const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
 
       if (email) {
         if (!EMAIL_REGEX.test(email)) {
@@ -238,14 +242,10 @@ async function staffRoutes(fastify, options) {
           return reply.code(400).send({ error: "Email already exists" });
         }
       }
-      if (phone && (await checkDuplicate("phone", phone, req.params.id))) {
-        return reply.code(400).send({ error: "Phone number already exists" });
-      }
 
       const updateData = {
         ...(name && { name: name.trim() }),
         ...(email && { email }),
-        ...(phone && { phone }),
         ...(permissions && { permissions: normalizePermissions(permissions) }),
         ...(isActive !== undefined && { isActive }),
         updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
