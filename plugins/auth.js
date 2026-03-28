@@ -4,6 +4,7 @@ import fp from "fastify-plugin";
 
 async function authPlugin(fastify) {
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
+  const otpCollection = () => fastify.mongo.db.collection("otps"); // ← new
 
   const ACCESS_SECRET = process.env.JWT_SECRET;
   const REFRESH_SECRET = process.env.REFRESH_SECRET;
@@ -54,13 +55,17 @@ async function authPlugin(fastify) {
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
-    sameSite: "strict",
+    sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });
+
   await Promise.all([
     tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
-    tokensCollection().createIndex({ userId: 1, labId: 1 }), // ✅ was labId: 1 — already correct, kept for clarity
+    tokensCollection().createIndex({ userId: 1, labId: 1 }),
+    // OTP indexes — TTL auto-deletes expired OTPs, compound for fast lookup
+    otpCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }), // ← auto-delete
+    otpCollection().createIndex({ phone: 1, labKey: 1 }), // ← fast lookup
   ]);
 }
 
