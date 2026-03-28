@@ -7,8 +7,8 @@ import fastifyCookie from "@fastify/cookie";
 import dotenv from "dotenv";
 
 import authPlugin from "./plugins/auth.js";
-import { ensureIndexes } from "./db/indexes.js";
-import serializerPlugin from "./plugins/serializer.js";
+import smsPlugin from "./plugins/sms.js";
+import { ensureIndexes } from "./db/indexes.js";;
 
 import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
@@ -69,7 +69,10 @@ try {
 // ── 5. Auth plugin (decorates fastify.authenticate, fastify.authorize, etc.)
 await fastify.register(authPlugin);
 
-// ── 6. Swagger
+// ── 6. SMS plugin (decorates fastify.sendSMS)
+await fastify.register(smsPlugin);
+
+// ── 7. Swagger
 await fastify.register(swagger, {
   openapi: {
     info: {
@@ -92,7 +95,7 @@ await fastify.register(swaggerUi, {
   staticCSP: true,
 });
 
-// ── 7. Routes
+// ── 8. Routes
 const API = "/api/v1";
 
 fastify.register(authRoutes, { prefix: API });
@@ -104,7 +107,7 @@ fastify.register(testRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 
-fastify.get("/", (req, reply) => reply.send("Ok"));
+fastify.get("/", async (req, reply) => reply.send("Ok"));
 
 try {
   await fastify.listen({ port: process.env.PORT || 3000, host: "0.0.0.0" });

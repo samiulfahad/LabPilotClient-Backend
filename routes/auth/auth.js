@@ -110,7 +110,7 @@ async function authRoutes(fastify) {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
     });
-
+    
     reply
       .setCookie("refreshToken", refreshTokenPlain, fastify.cookieOptions)
       .setCookie("deviceId", deviceId, fastify.cookieOptions);
