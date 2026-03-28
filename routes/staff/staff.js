@@ -68,7 +68,7 @@ const createStaffSchema = {
     summary: "Add a new staff member to the lab",
     body: {
       type: "object",
-      required: ["name", "email", "phone", "permissions"],
+      required: ["name", "phone", "permissions"], // email is optional
       additionalProperties: false,
       properties: staffBodyProperties,
     },
@@ -180,14 +180,16 @@ async function staffRoutes(fastify, options) {
     try {
       const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
 
-      const email = rawEmail.toLowerCase().trim();
+      const email = rawEmail ? rawEmail.toLowerCase().trim() : null;
       const phone = rawPhone.trim();
 
-      if (!EMAIL_REGEX.test(email)) {
-        return reply.code(400).send({ error: "Invalid email format" });
-      }
-      if (await checkDuplicate("email", email)) {
-        return reply.code(400).send({ error: "Email already exists" });
+      if (email) {
+        if (!EMAIL_REGEX.test(email)) {
+          return reply.code(400).send({ error: "Invalid email format" });
+        }
+        if (await checkDuplicate("email", email)) {
+          return reply.code(400).send({ error: "Email already exists" });
+        }
       }
       if (await checkDuplicate("phone", phone)) {
         return reply.code(400).send({ error: "Phone number already exists" });
@@ -196,7 +198,7 @@ async function staffRoutes(fastify, options) {
       const result = await collection.insertOne({
         labId: labId(req),
         name: name.trim(),
-        email,
+        ...(email && { email }),
         phone,
         permissions: normalizePermissions(permissions),
         isActive: isActive ?? true,
@@ -219,7 +221,7 @@ async function staffRoutes(fastify, options) {
 
       const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
 
-      const email = rawEmail?.toLowerCase().trim();
+      const email = rawEmail?.toLowerCase().trim() || null;
       const phone = rawPhone?.trim();
 
       if (email) {
