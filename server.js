@@ -19,7 +19,7 @@ import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
 import commissionRoutes from "./routes/commission/commission.js";
 import transactionRoutes from "./routes/transaction/transaction.js";
-import profileRoutes from "./routes/account/account.js";
+import accountRoutes from "./routes/account/account.js";
 
 dotenv.config();
 
@@ -109,7 +109,7 @@ fastify.register(testRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 fastify.register(transactionRoutes, { prefix: API });
-fastify.register(profileRoutes, { prefix: API });
+fastify.register(accountRoutes, { prefix: API });
 
 fastify.get("/", async (req, reply) => reply.send("Ok"));
 

@@ -70,24 +70,21 @@ async function accountRoutes(fastify) {
   });
 
   // ── GET /account/sessions ──────────────────────────────────────────────────
-  // List all active sessions for the current user
   fastify.get("/account/sessions", async (req, reply) => {
     try {
       const currentDeviceId = req.cookies?.deviceId ?? null;
 
       const sessions = await tokenCol()
         .find(
-          { userId: req.user.id, expiresAt: { $gt: new Date() } },
           {
-            projection: {
-              refreshToken: 0, // never expose the hash
-            },
+            userId: myId(req), // ✅ ObjectId — was req.user.id (string)
+            expiresAt: { $gt: new Date() },
           },
+          { projection: { refreshToken: 0 } },
         )
         .sort({ lastUsedAt: -1 })
         .toArray();
 
-      // Mark the current session so the frontend can highlight it
       const result = sessions.map((s) => ({
         ...s,
         isCurrent: s.deviceId === currentDeviceId,
@@ -101,7 +98,6 @@ async function accountRoutes(fastify) {
   });
 
   // ── DELETE /account/sessions/:deviceId ────────────────────────────────────
-  // Revoke a specific session (can't revoke own current session via this route)
   fastify.delete("/account/sessions/:deviceId", revokeSessionSchema, async (req, reply) => {
     try {
       const { deviceId } = req.params;
@@ -112,7 +108,7 @@ async function accountRoutes(fastify) {
       }
 
       const result = await tokenCol().deleteOne({
-        userId: req.user.id,
+        userId: myId(req), // ✅ ObjectId — was req.user.id (string)
         deviceId,
       });
 
@@ -146,7 +142,6 @@ async function accountRoutes(fastify) {
         return reply.code(400).send({ error: "New phone is the same as the current one" });
       }
 
-      // Uniqueness within the same lab (keyed by labKey since labId may be string or ObjectId)
       const taken = await staffCol().findOne(
         {
           labKey: me.labKey,
