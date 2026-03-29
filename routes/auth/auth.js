@@ -5,7 +5,7 @@ import toObjectId from "../../utils/db.js";
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
-  const otpCollection = () => fastify.mongo.db.collection("otps");
+  const otpCollection    = () => fastify.mongo.db.collection("otps");
 
   // ── POST /register ────────────────────────────────────────────────────────
   fastify.post("/register", async (req, reply) => {
@@ -21,12 +21,8 @@ async function authRoutes(fastify) {
     }
 
     const allowedPermissions = [
-      "createInvoice",
-      "editInvoice",
-      "deleteInvoice",
-      "cashmemo",
-      "uploadReport",
-      "downloadReport",
+      "createInvoice", "editInvoice", "deleteInvoice",
+      "cashmemo", "uploadReport", "downloadReport",
     ];
     const cleanPermissions = {};
     for (const perm of allowedPermissions) {
@@ -39,7 +35,7 @@ async function authRoutes(fastify) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const result = await staffsCollection().insertOne({
-      labId,
+      labId: toObjectId(labId),
       labKey,
       name,
       phone,
@@ -58,7 +54,7 @@ async function authRoutes(fastify) {
 
   // ── POST /login ───────────────────────────────────────────────────────────
   fastify.post("/login", async (req, reply) => {
-    const { labKey, phone, password } = req.body || {};
+    const { labKey, phone, password, device } = req.body || {};
     if (!labKey || !phone || !password) {
       return reply.code(400).send({ error: "Missing required fields" });
     }
@@ -69,12 +65,12 @@ async function authRoutes(fastify) {
     }
 
     const payload = {
-      id: staff._id.toString(),
-      name: staff.name,
-      role: staff.role,
+      id:          staff._id.toString(),
+      name:        staff.name,
+      role:        staff.role,
       permissions: staff.permissions,
-      labKey: staff.labKey,
-      labId: staff.labId,
+      labKey:      staff.labKey,
+      labId:       staff.labId,
     };
 
     const lab = await fastify.mongo.db.collection("labs").findOne(
@@ -94,33 +90,62 @@ async function authRoutes(fastify) {
     const accessToken = await reply.jwtSign(payload);
 
     const refreshTokenPlain = await fastify.jwt.sign(payload, {
-      key: fastify.REFRESH_SECRET,
+      key:       fastify.REFRESH_SECRET,
       expiresIn: fastify.REFRESH_EXPIRY,
     });
 
-    const sessions = await tokensCollection().find({ userId: payload.id }).sort({ createdAt: 1 }).toArray();
+    // ── Enforce max 5 concurrent sessions ─────────────────────────────────
+    const sessions = await tokensCollection()
+      .find({ userId: payload.id })
+      .sort({ createdAt: 1 })
+      .toArray();
     if (sessions.length >= 5) {
       await tokensCollection().deleteOne({ _id: sessions[0]._id });
     }
 
+    // ── Collect request metadata ───────────────────────────────────────────
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      "unknown";
+
+    const userAgent = req.headers["user-agent"] || "unknown";
+
+    // device object sent from the frontend (browser, OS, screen, timezone, etc.)
+    const deviceInfo = {
+      // From frontend
+      browser:    device?.browser    ?? "Unknown",
+      browserVersion: device?.browserVersion ?? "",
+      os:         device?.os         ?? "Unknown",
+      osVersion:  device?.osVersion  ?? "",
+      deviceType: device?.deviceType ?? "unknown",   // "mobile" | "tablet" | "desktop"
+      screenRes:  device?.screenRes  ?? "",           // e.g. "1920x1080"
+      timezone:   device?.timezone   ?? "",           // e.g. "Asia/Dhaka"
+      language:   device?.language   ?? "",           // e.g. "en-US"
+      // From server
+      ip,
+      userAgent,
+    };
+
     await tokensCollection().insertOne({
-      userId: payload.id,
-      labId: payload.labId,
+      userId:       payload.id,
+      labId:        payload.labId,
       deviceId,
       refreshToken: fastify.hashToken(refreshTokenPlain),
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
+      device:       deviceInfo,
+      createdAt:    new Date(),
+      lastUsedAt:   new Date(),
+      expiresAt:    new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
     });
 
     reply
       .setCookie("refreshToken", refreshTokenPlain, fastify.cookieOptions)
-      .setCookie("deviceId", deviceId, fastify.cookieOptions);
+      .setCookie("deviceId",     deviceId,          fastify.cookieOptions);
 
     return { accessToken, lab };
   });
 
   // ── POST /forgot-password ─────────────────────────────────────────────────
-  // Accepts phone + labKey, sends a 6-digit OTP via SMS
   fastify.post("/forgot-password", async (req, reply) => {
     const { phone, labKey } = req.body || {};
     if (!phone || !labKey) {
@@ -129,43 +154,37 @@ async function authRoutes(fastify) {
 
     const staff = await staffsCollection().findOne({ phone, labKey: Number(labKey) });
 
-    // Always return 200 — never reveal whether the phone exists (security)
     if (!staff || staff.isDeleted || !staff.isActive) {
       return reply.send({ message: "If this number is registered, an OTP has been sent." });
     }
 
-    // Rate limit: block if an unexpired OTP already exists (sent < 2 min ago)
     const existing = await otpCollection().findOne({ phone, labKey: Number(labKey) });
     if (existing) {
       const ageMs = Date.now() - existing.createdAt;
       if (ageMs < 2 * 60 * 1000) {
         return reply.code(429).send({ error: "OTP already sent. Please wait 2 minutes before requesting again." });
       }
-      // Old OTP exists but is stale — delete it and issue a new one
       await otpCollection().deleteOne({ _id: existing._id });
     }
 
-    // Generate 6-digit OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000));
 
     await otpCollection().insertOne({
       phone,
-      labKey: Number(labKey),
-      staffId: staff._id.toString(),
-      otp: fastify.hashToken(otp), // store hashed, never plain
+      labKey:   Number(labKey),
+      staffId:  staff._id.toString(),
+      otp:      fastify.hashToken(otp),
       createdAt: Date.now(),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min TTL
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     });
 
-    // Send OTP via SMS (awaited here so we can catch send failures)
     try {
       await fastify.sendSMS({
-        number: phone,
+        number:  phone,
         message: `Your LabPilot password reset OTP is ${otp}. Valid for 10 minutes. Do not share.`,
       });
     } catch (err) {
       fastify.log.error({ err }, "OTP SMS failed");
-      // Clean up the OTP we just inserted so user can retry
       await otpCollection().deleteOne({ staffId: staff._id.toString() });
       return reply.code(500).send({ error: "Failed to send OTP. Please try again." });
     }
@@ -174,7 +193,6 @@ async function authRoutes(fastify) {
   });
 
   // ── POST /reset-password ──────────────────────────────────────────────────
-  // Accepts phone + labKey + otp + newPassword
   fastify.post("/reset-password", async (req, reply) => {
     const { phone, labKey, otp, newPassword } = req.body || {};
     if (!phone || !labKey || !otp || !newPassword) {
@@ -186,26 +204,22 @@ async function authRoutes(fastify) {
 
     const record = await otpCollection().findOne({
       phone,
-      labKey: Number(labKey),
-      otp: fastify.hashToken(otp),
-      expiresAt: { $gt: new Date() }, // not expired
+      labKey:    Number(labKey),
+      otp:       fastify.hashToken(otp),
+      expiresAt: { $gt: new Date() },
     });
 
     if (!record) {
       return reply.code(400).send({ error: "Invalid or expired OTP" });
     }
 
-    // Hash new password and update staff
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await staffsCollection().updateOne(
       { _id: toObjectId(record.staffId) },
       { $set: { password: hashedPassword, updatedAt: new Date() } },
     );
 
-    // Delete the used OTP immediately
     await otpCollection().deleteOne({ _id: record._id });
-
-    // Invalidate all active sessions for security
     await tokensCollection().deleteMany({ userId: record.staffId });
 
     return reply.send({ message: "Password reset successful. Please log in with your new password." });
@@ -226,32 +240,33 @@ async function authRoutes(fastify) {
     }
 
     const payload = {
-      id: decoded.id,
-      name: decoded.name,
-      role: decoded.role,
+      id:          decoded.id,
+      name:        decoded.name,
+      role:        decoded.role,
       permissions: decoded.permissions,
-      labKey: decoded.labKey,
-      labId: decoded.labId,
+      labKey:      decoded.labKey,
+      labId:       decoded.labId,
     };
 
     const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
-      key: fastify.REFRESH_SECRET,
+      key:       fastify.REFRESH_SECRET,
       expiresIn: fastify.REFRESH_EXPIRY,
     });
 
     const updatedSession = await tokensCollection().findOneAndUpdate(
       {
-        userId: payload.id,
-        labId: payload.labId,
+        userId:       payload.id,
+        labId:        payload.labId,
         deviceId,
         refreshToken: fastify.hashToken(refreshToken),
-        expiresAt: { $gt: new Date() },
+        expiresAt:    { $gt: new Date() },
       },
       {
         $set: {
           refreshToken: fastify.hashToken(newRefreshTokenPlain),
-          createdAt: new Date(),
-          expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
+          lastUsedAt:   new Date(),
+          createdAt:    new Date(),
+          expiresAt:    new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
         },
       },
       { returnDocument: "after" },
@@ -287,7 +302,9 @@ async function authRoutes(fastify) {
       });
     }
 
-    reply.clearCookie("refreshToken", fastify.cookieOptions).clearCookie("deviceId", fastify.cookieOptions);
+    reply
+      .clearCookie("refreshToken", fastify.cookieOptions)
+      .clearCookie("deviceId",     fastify.cookieOptions);
 
     return { message: "Logged out from this device" };
   });
@@ -296,12 +313,14 @@ async function authRoutes(fastify) {
   fastify.post("/logout-all", { onRequest: [fastify.authenticate] }, async (req, reply) => {
     await tokensCollection().deleteMany({
       userId: req.user.id,
-      labId: req.user.labId,
+      labId:  req.user.labId,
     });
 
-    reply.clearCookie("refreshToken", fastify.cookieOptions).clearCookie("deviceId", fastify.cookieOptions);
+    reply
+      .clearCookie("refreshToken", fastify.cookieOptions)
+      .clearCookie("deviceId",     fastify.cookieOptions);
 
-    return { message: "Logged out from all devices in this lab" };
+    return { message: "Logged out from all devices in this lab" }
   });
 }
 

@@ -8,7 +8,7 @@ import dotenv from "dotenv";
 
 import authPlugin from "./plugins/auth.js";
 import smsPlugin from "./plugins/sms.js";
-import { ensureIndexes } from "./db/indexes.js";;
+import { ensureIndexes } from "./db/indexes.js";
 
 import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
@@ -18,6 +18,8 @@ import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
 import commissionRoutes from "./routes/commission/commission.js";
+import transactionRoutes from "./routes/transaction/transaction.js";
+import profileRoutes from "./routes/account/account.js";
 
 dotenv.config();
 
@@ -55,7 +57,7 @@ await fastify.register(mongodb, {
 });
 
 // ── 3a. Normalize ObjectIds in all responses
-// await fastify.register(serializerPlugin); 
+// await fastify.register(serializerPlugin);
 
 // ── 4. Ensure DB indexes
 try {
@@ -106,6 +108,8 @@ fastify.register(staffRoutes, { prefix: API });
 fastify.register(testRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
+fastify.register(transactionRoutes, { prefix: API });
+fastify.register(profileRoutes, { prefix: API });
 
 fastify.get("/", async (req, reply) => reply.send("Ok"));
 

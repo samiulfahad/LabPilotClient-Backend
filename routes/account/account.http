@@ -1,0 +1,35 @@
+### Profile Routes
+
+@baseUrl = http://127.0.0.1:3000/api/v1
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YzY0YjJlMDdlNjU0MDkxMWJiMDM1OSIsIm5hbWUiOiJTYW1pdWwiLCJyb2xlIjoic3RhZmYiLCJwZXJtaXNzaW9ucyI6eyJjcmVhdGVJbnZvaWNlIjp0cnVlLCJlZGl0SW52b2ljZSI6dHJ1ZSwiZGVsZXRlSW52b2ljZSI6ZmFsc2UsImNhc2htZW1vIjp0cnVlLCJ1cGxvYWRSZXBvcnQiOnRydWUsImRvd25sb2FkUmVwb3J0IjpmYWxzZX0sImxhYktleSI6MTExMTEsImxhYklkIjoiNjljNTY0MzlhYmI3NzUzNTQ5ZjEwN2E0IiwiaWF0IjoxNzc0Nzk4MjkzLCJleHAiOjE3NzQ3OTkxOTN9.JJMuJlov1g012aZcP4fpW9BKnlsAKCNVj-0O7frSSVE
+
+# ── GET /profile
+GET {{baseUrl}}/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+###
+
+# ── PATCH /profile/phone
+PATCH {{baseUrl}}/profile/phone
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "phone": "01712345678",
+  "currentPassword": "yourCurrentPassword"
+}
+
+###
+
+# ── PATCH /profile/password
+PATCH {{baseUrl}}/profile/password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "currentPassword": "yourCurrentPassword",
+  "newPassword": "yourNewPassword123"
+}
+
+###

@@ -305,13 +305,10 @@ async function invoiceRoutes(fastify) {
           status: false,
           by: { id: userId(req), name: req.user.name }, // ← fixed
         },
-        collections: [
-          {
-            by: { id: userId(req), name: req.user.name }, // ← fixed
-            amount: amount.paid,
-            at: Date.now(),
-          },
-        ],
+        collections:
+          amount.paid > 0
+            ? [{ by: { id: userId(req), name: req.user.name }, amount: amount.paid, at: Date.now() }]
+            : [],
         deletion: {
           status: false,
           at: null,
