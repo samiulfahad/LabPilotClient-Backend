@@ -1,7 +1,6 @@
 import toObjectId from "../../utils/db.js";
 
 const collectionName = "staffs";
-
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ─── Reusable Schema Fragments ────────────────────────────────────────────────
@@ -74,7 +73,7 @@ const createStaffSchema = {
     summary: "Add a new staff member to the lab",
     body: {
       type: "object",
-      required: ["name", "phone", "permissions"], // email is optional
+      required: ["name", "phone", "permissions"],
       additionalProperties: false,
       properties: staffBodyProperties,
     },
@@ -97,7 +96,6 @@ const updateStaffSchema = {
         email: staffBodyProperties.email,
         permissions: staffBodyProperties.permissions,
         isActive: staffBodyProperties.isActive,
-        // phone and role are intentionally excluded
       },
     },
   },
@@ -146,8 +144,13 @@ async function staffRoutes(fastify, options) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  const checkDuplicate = async (field, value, excludeId = null) => {
-    const query = { [field]: value, "deletion.status": { $ne: true } };
+  // ── Scoped duplicate checker ──────────────────────────────────────────────
+  const checkDuplicate = async (req, field, value, excludeId = null) => {
+    const query = {
+      [field]: value,
+      labId: labId(req),
+      "deletion.status": { $ne: true },
+    };
     if (excludeId) query._id = { $ne: toObjectId(excludeId) };
     return collection.findOne(query, { projection: { _id: 1 } });
   };
@@ -199,12 +202,13 @@ async function staffRoutes(fastify, options) {
         if (!EMAIL_REGEX.test(email)) {
           return reply.code(400).send({ error: "Invalid email format" });
         }
-        if (await checkDuplicate("email", email)) {
-          return reply.code(400).send({ error: "Email already exists" });
+        if (await checkDuplicate(req, "email", email)) {
+          return reply.code(409).send({ error: "Email already exists in this lab" });
         }
       }
-      if (await checkDuplicate("phone", phone)) {
-        return reply.code(400).send({ error: "Phone number already exists" });
+
+      if (await checkDuplicate(req, "phone", phone)) {
+        return reply.code(409).send({ error: "Phone number already exists in this lab" });
       }
 
       const result = await collection.insertOne({
@@ -240,8 +244,8 @@ async function staffRoutes(fastify, options) {
         if (!EMAIL_REGEX.test(email)) {
           return reply.code(400).send({ error: "Invalid email format" });
         }
-        if (await checkDuplicate("email", email, req.params.id)) {
-          return reply.code(400).send({ error: "Email already exists" });
+        if (await checkDuplicate(req, "email", email, req.params.id)) {
+          return reply.code(409).send({ error: "Email already exists in this lab" });
         }
       }
 
