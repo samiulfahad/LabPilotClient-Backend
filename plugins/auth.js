@@ -32,11 +32,12 @@ async function authPlugin(fastify) {
     sign: { expiresIn: ACCESS_EXPIRY },
   });
 
+  // 444 = expired/invalid access token → frontend will attempt refresh
   fastify.decorate("authenticate", async (req, reply) => {
     try {
       await req.jwtVerify();
     } catch {
-      reply.code(444).send({ error: "Access token invalid or expired" });
+      return reply.code(444).send({ error: "Access token invalid or expired" });
     }
   });
 

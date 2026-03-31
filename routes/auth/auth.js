@@ -223,6 +223,7 @@ async function authRoutes(fastify) {
   });
 
   // ── POST /refresh ─────────────────────────────────────────────────────────
+  // 445 = refresh token bad/expired/session not found → frontend must logout
   fastify.post("/refresh", async (req, reply) => {
     const { refreshToken, deviceId } = req.cookies || {};
     if (!refreshToken || !deviceId) {
@@ -262,6 +263,7 @@ async function authRoutes(fastify) {
         $set: {
           refreshToken: fastify.hashToken(newRefreshTokenPlain),
           lastUsedAt: new Date(),
+          // ✅ no createdAt reset — don't touch it
           expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
         },
       },
