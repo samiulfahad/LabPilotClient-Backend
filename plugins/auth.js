@@ -4,7 +4,7 @@ import fp from "fastify-plugin";
 
 async function authPlugin(fastify) {
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
-  const otpCollection = () => fastify.mongo.db.collection("otps"); // ← new
+  const otpCollection = () => fastify.mongo.db.collection("otps");
 
   const ACCESS_SECRET = process.env.JWT_SECRET;
   const REFRESH_SECRET = process.env.REFRESH_SECRET;
@@ -36,7 +36,7 @@ async function authPlugin(fastify) {
     try {
       await req.jwtVerify();
     } catch {
-      reply.code(401).send({ error: "Unauthorized: Invalid or expired access token" });
+      reply.code(444).send({ error: "Access token invalid or expired" });
     }
   });
 
@@ -47,11 +47,9 @@ async function authPlugin(fastify) {
   });
 
   fastify.decorate("hashToken", (token) => crypto.createHash("sha256").update(token).digest("hex"));
-
   fastify.decorate("REFRESH_SECRET", REFRESH_SECRET);
   fastify.decorate("REFRESH_EXPIRY", REFRESH_EXPIRY);
   fastify.decorate("REFRESH_EXPIRY_MS", REFRESH_EXPIRY_MS);
-
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
@@ -63,9 +61,8 @@ async function authPlugin(fastify) {
     tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
     tokensCollection().createIndex({ userId: 1, labId: 1 }),
-    // OTP indexes — TTL auto-deletes expired OTPs, compound for fast lookup
-    otpCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }), // ← auto-delete
-    otpCollection().createIndex({ phone: 1, labKey: 1 }),                     // ← fast lookup
+    otpCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    otpCollection().createIndex({ phone: 1, labKey: 1 }),
   ]);
 }
 
