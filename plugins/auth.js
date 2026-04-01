@@ -51,11 +51,15 @@ async function authPlugin(fastify) {
   fastify.decorate("REFRESH_SECRET", REFRESH_SECRET);
   fastify.decorate("REFRESH_EXPIRY", REFRESH_EXPIRY);
   fastify.decorate("REFRESH_EXPIRY_MS", REFRESH_EXPIRY_MS);
+
+  // ✅ sameSite: "none" + secure: true → required for cross-origin cookies
+  // ✅ maxAge → cookie survives browser restarts, won't be a session cookie
   fastify.decorate("cookieOptions", {
     httpOnly: true,
     path: "/",
-    sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+    secure: true,
+    maxAge: Math.floor(REFRESH_EXPIRY_MS / 1000),
   });
 
   await Promise.all([
