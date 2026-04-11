@@ -268,6 +268,7 @@ async function invoiceRoutes(fastify) {
         labKey: req.user.labKey,
         invoiceId,
         createdAt: Date.now(),
+        expiresAt: new Date(Date.now() + 60 * 60 * 24 * 180 * 1000),
         patient: {
           name: patient.name,
           gender: patient.gender,

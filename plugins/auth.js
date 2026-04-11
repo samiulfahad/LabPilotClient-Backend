@@ -3,9 +3,6 @@ import crypto from "crypto";
 import fp from "fastify-plugin";
 
 async function authPlugin(fastify) {
-  const tokensCollection = () => fastify.mongo.db.collection("tokens");
-  const otpCollection = () => fastify.mongo.db.collection("otps");
-
   const ACCESS_SECRET = process.env.JWT_SECRET;
   const REFRESH_SECRET = process.env.REFRESH_SECRET;
   const ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRY;
@@ -61,14 +58,6 @@ async function authPlugin(fastify) {
     secure: true,
     maxAge: Math.floor(REFRESH_EXPIRY_MS / 1000),
   });
-
-  await Promise.all([
-    tokensCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    tokensCollection().createIndex({ userId: 1, deviceId: 1 }),
-    tokensCollection().createIndex({ userId: 1, labId: 1 }),
-    otpCollection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    otpCollection().createIndex({ phone: 1, labKey: 1 }),
-  ]);
 }
 
 export default fp(authPlugin);
