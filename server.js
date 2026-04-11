@@ -46,7 +46,9 @@ await fastify.register(cors, {
     "http://localhost:5173",
     "http://localhost:5174",
   ],
+  // ✅ OPTIONS added — required for cross-origin preflight requests
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 });
 
@@ -55,9 +57,6 @@ await fastify.register(mongodb, {
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
-
-// ── 3a. Normalize ObjectIds in all responses
-// await fastify.register(serializerPlugin);
 
 // ── 4. Ensure DB indexes
 try {
