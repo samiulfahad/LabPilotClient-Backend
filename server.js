@@ -40,12 +40,7 @@ await fastify.register(fastifyCookie);
 
 // ── 2. CORS — must be before routes so preflight OPTIONS requests are handled
 await fastify.register(cors, {
-  origin: [
-    "https://sfahad.netlify.app",
-    "https://sfahad-admin.netlify.app",
-    "http://localhost:5173",
-    "http://localhost:5174",
-  ],
+  origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "http://localhost:5173", "http://localhost:5174"],
   // ✅ OPTIONS added — required for cross-origin preflight requests
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -97,7 +92,7 @@ await fastify.register(swaggerUi, {
 });
 
 // ── 8. Routes
-const API = "/api/v1";
+const API = "/v1";
 
 fastify.register(authRoutes, { prefix: API });
 fastify.register(cashmemoRoutes, { prefix: API });
