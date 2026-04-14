@@ -83,6 +83,7 @@ async function authRoutes(fastify) {
         projection: {
           name: 1,
           labKey: 1,
+          registrationNumber: 1,
           "contact.primary": 1,
           "contact.address": 1,
           "contact.district": 1,
