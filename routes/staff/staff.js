@@ -1,4 +1,5 @@
 import toObjectId from "../../utils/db.js";
+import generateInvoiceId from "../../utils/generateInvoiceId.js";
 
 const collectionName = "staffs";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -211,6 +212,8 @@ async function staffRoutes(fastify, options) {
         return reply.code(409).send({ error: "Phone number already exists in this lab" });
       }
 
+      const password = generateInvoiceId()
+
       const result = await collection.insertOne({
         labId: labId(req),
         name: name.trim(),
@@ -222,6 +225,9 @@ async function staffRoutes(fastify, options) {
         deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
+
+      const message = `Your LabPilotPro password is ${password}`
+      fastify.sendSMS(phone, message)
 
       return reply.code(201).send({ _id: result.insertedId });
     } catch (err) {
