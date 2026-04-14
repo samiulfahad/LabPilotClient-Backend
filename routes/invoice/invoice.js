@@ -201,6 +201,7 @@ async function invoiceRoutes(fastify) {
   fastify.get(
     "/invoice/required-data",
     {
+      ...requireCreate,
       schema: {
         tags: ["Invoices"],
         summary: "Fetch referrers and tests needed to create an invoice",
