@@ -39,6 +39,7 @@ async function authPlugin(fastify) {
   });
 
   fastify.decorate("authorize", (permission) => async (req, reply) => {
+    if (req.user.role === "admin") return;
     if (!req.user.permissions?.[permission]) {
       return reply.code(403).send({ error: "Forbidden: Missing required permission" });
     }

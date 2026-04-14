@@ -24,6 +24,7 @@ async function cashmemoRoutes(fastify) {
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("cashmemo"));
 
   // ── GET /cashmemo/summary ─────────────────────────────────────────────────
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
