@@ -214,8 +214,7 @@ async function staffRoutes(fastify, options) {
       }
 
       const password = generateInvoiceId();
-      const hashedPassword = await bcrypt.hash(password, 10);
-      
+      const hashedPassword = await bcrypt.hash(password, 10)
       const result = await collection.insertOne({
         labId: labId(req),
         labKey: parseInt(req.user.labKey),
