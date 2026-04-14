@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import toObjectId from "../../utils/db.js";
 import generateInvoiceId from "../../utils/generateInvoiceId.js";
 
@@ -212,13 +213,16 @@ async function staffRoutes(fastify, options) {
         return reply.code(409).send({ error: "Phone number already exists in this lab" });
       }
 
-      const password = generateInvoiceId()
-
+      const password = generateInvoiceId();
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
       const result = await collection.insertOne({
         labId: labId(req),
+        labKey: parseInt(req.user.labKey),
         name: name.trim(),
         ...(email && { email }),
         phone,
+        password: hashedPassword,
         role: "staff",
         permissions: normalizePermissions(permissions),
         isActive: isActive ?? true,
@@ -226,8 +230,10 @@ async function staffRoutes(fastify, options) {
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
 
-      const message = `Your LabPilotPro password is ${password}`
-      fastify.sendSMS(phone, message)
+      const message = `LabPilotPro.com-এ আপনাকে স্বাগতম। আপনার পাসওয়ার্ড ${password} এবং ল্যাব আইডি ${req.user.labKey} , লগইন করার পর পাসওয়ার্ডটি পরিবর্তন করুন 
+      `;
+
+      fastify.sendSMS({ number: phone, message });
 
       return reply.code(201).send({ _id: result.insertedId });
     } catch (err) {
