@@ -190,7 +190,7 @@ const patientInfoSchema = {
 async function invoiceRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
-  const userId = (req) => toObjectId(req.user.id); // ← helper to avoid repetition
+  const userId = (req) => toObjectId(req.user.id);
 
   fastify.addHook("onRequest", fastify.authenticate);
 
@@ -287,12 +287,12 @@ async function invoiceRoutes(fastify) {
           paid: amount.paid,
         },
         createdBy: {
-          id: userId(req), // ← fixed
+          id: userId(req),
           name: req.user.name,
         },
         delivery: {
           status: false,
-          by: { id: userId(req), name: req.user.name }, // ← fixed
+          by: { id: userId(req), name: req.user.name },
         },
         collections:
           amount.paid > 0
@@ -344,7 +344,7 @@ async function invoiceRoutes(fastify) {
             $set: { "amount.paid": invoice.amount.final },
             $push: {
               collections: {
-                by: { id: userId(req), name: req.user.name }, // ← fixed
+                by: { id: userId(req), name: req.user.name },
                 amount: due,
                 at: Date.now(),
               },
@@ -374,11 +374,14 @@ async function invoiceRoutes(fastify) {
     async (req, reply) => {
       try {
         const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
+        const isStaff = req.user.role === "staff";
+
         const result = await col()
           .find(
             {
               labId: labId(req),
               "deletion.status": false,
+              ...(isStaff && { "createdBy.id": userId(req) }), // ✅ staff sees only their own
               ...buildCursorFilter({ cursor, startDate, endDate }),
             },
             {
@@ -401,6 +404,7 @@ async function invoiceRoutes(fastify) {
           .sort({ createdAt: -1 })
           .limit(limit + 1)
           .toArray();
+
         return reply.send(paginatedResponse(result, limit, "createdAt"));
       } catch (err) {
         req.log.error(err);
@@ -545,7 +549,7 @@ async function invoiceRoutes(fastify) {
         },
         updated: {
           at: Date.now(),
-          by: { id: userId(req), name: req.user.name }, // ← fixed
+          by: { id: userId(req), name: req.user.name },
         },
       };
 
@@ -581,7 +585,7 @@ async function invoiceRoutes(fastify) {
             $set: {
               delivery: {
                 status: true,
-                by: { id: userId(req), name: req.user.name }, // ← fixed
+                by: { id: userId(req), name: req.user.name },
               },
             },
           },
@@ -620,7 +624,7 @@ async function invoiceRoutes(fastify) {
               deletion: {
                 status: true,
                 at: Date.now(),
-                by: { id: userId(req), name: req.user.name }, // ← fixed
+                by: { id: userId(req), name: req.user.name },
               },
             },
           },
