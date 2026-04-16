@@ -334,8 +334,6 @@ fastify.get(
   async (req, reply) => {
     try {
       const q = req.query.q.trim();
-      const isStaff = req.user.role === "staff";
-
       // ── Detect query type ──────────────────────────────────────────────
       const isPhone    = /^\d{7,15}$/.test(q);
       const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
@@ -343,8 +341,7 @@ fastify.get(
 
       const baseMatch = {
         labId: labId(req),
-        "deletion.status": false,
-        ...(isStaff && { "createdBy.id": userId(req) }),
+        "deletion.status": false
       };
 
       let filter;
