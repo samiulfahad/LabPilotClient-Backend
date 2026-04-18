@@ -23,7 +23,7 @@ import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
 import commissionRoutes from "./routes/commission/commission.js";
 import transactionRoutes from "./routes/transaction/transaction.js";
 import accountRoutes from "./routes/account/account.js";
-import labBillingRoutes from "./routes/billing/labBilling.js";
+import billingRoutes from "./routes/billing/billing.js";
 import internalRoutes from "./routes/internal/internal.js";
 
 dotenv.config();
