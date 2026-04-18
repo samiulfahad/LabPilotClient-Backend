@@ -10,18 +10,22 @@ export async function generateMonthlyBills(db, options = {}) {
   } else {
     const nowDhaka = new Date(nowUtc + DHAKA_OFFSET_MS);
     y = nowDhaka.getUTCFullYear();
-    m = nowDhaka.getUTCMonth() + 1; // 1-indexed
+    m = nowDhaka.getUTCMonth(); // 0-indexed → gives previous month (postpaid)
+    if (m === 0) {
+      m = 12;
+      y -= 1;
+    } // January edge case → bill for December
   }
 
-  const periodStart = new Date(Date.UTC(y, m - 1, 1)); // e.g. 2026-03-01T00:00:00.000Z
-  const periodEnd = new Date(Date.UTC(y, m, 1)); // e.g. 2026-04-01T00:00:00.000Z — query bound only
-  const periodEndDisplay = new Date(Date.UTC(y, m, 0)); // e.g. 2026-03-31T00:00:00.000Z — stored for display
+  const periodStart = new Date(Date.UTC(y, m - 1, 1)); // e.g. 2026-04-01T00:00:00.000Z
+  const periodEnd = new Date(Date.UTC(y, m, 1)); // e.g. 2026-05-01T00:00:00.000Z — query bound only
+  const periodEndDisplay = new Date(Date.UTC(y, m, 0)); // e.g. 2026-04-30T00:00:00.000Z — stored for display
   const dueDate = periodEnd.getTime() + DUE_DAYS * 24 * 60 * 60 * 1000;
   const triggeredBy = options.triggeredBy || "cron";
 
   const labs = await db
     .collection("labs")
-    .find({ }, { projection: { _id: 1, name: 1, billing: 1 } })
+    .find({}, { projection: { _id: 1, name: 1, billing: 1 } })
     .toArray();
 
   let generated = 0;
