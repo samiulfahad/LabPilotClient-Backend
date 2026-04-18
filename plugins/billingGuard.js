@@ -1,7 +1,9 @@
 import fp from "fastify-plugin";
-import { getCached, setCached, invalidate } from "../shared/billingCache.js";
 
 async function billingGuardPlugin(fastify) {
+  const cache = new Map();
+  const CACHE_TTL_MS = 5 * 60 * 1000;
+
   async function fetchBlockedStatus(labId) {
     const unpaidBill = await fastify.mongo.db
       .collection("billings")
@@ -12,16 +14,18 @@ async function billingGuardPlugin(fastify) {
   }
 
   fastify.decorate("checkBillingBlocked", async (labIdObj) => {
-    const cached = getCached(labIdObj);
-    if (cached !== null) return cached;
+    const key = labIdObj.toString();
+    const cached = cache.get(key);
+
+    if (cached && Date.now() < cached.expiresAt) return cached.blocked;
 
     const blocked = await fetchBlockedStatus(labIdObj);
-    setCached(labIdObj, blocked);
+    cache.set(key, { blocked, expiresAt: Date.now() + CACHE_TTL_MS });
     return blocked;
   });
 
   fastify.decorate("invalidateBillingCache", (labIdObj) => {
-    invalidate(labIdObj);
+    cache.delete(labIdObj.toString());
   });
 }
 

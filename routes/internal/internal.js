@@ -1,8 +1,8 @@
-// Protected by INTERNAL_SECRET header only — not behind fastify.authenticate
-// Admin-api calls this after marking a bill paid, to invalidate lab-api cache
 import toObjectId from "../../utils/db.js";
 
 async function internalRoutes(fastify) {
+  // Not behind fastify.authenticate — protected by INTERNAL_SECRET header only
+  // Called by admin-api after marking a bill paid to instantly unblock the lab
   fastify.post("/internal/billing/cache-invalidate/:labId", async (req, reply) => {
     try {
       const secret = req.headers["x-internal-secret"];

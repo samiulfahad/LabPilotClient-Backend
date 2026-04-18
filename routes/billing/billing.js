@@ -64,6 +64,7 @@ async function billingRoutes(fastify) {
                 totalAmount: 1,
                 dueDate: 1,
                 billingPeriodStart: 1,
+                billingPeriodEnd: 1,
                 invoiceCount: 1,
                 breakdown: 1,
                 paidAt: 1,
@@ -84,13 +85,13 @@ async function billingRoutes(fastify) {
   );
 
   // ── POST /billing/pay/:billingId ─────────────────────────────────────────
-  // Simple pay button for now — replace body with payment gateway webhook later
+  // Simple pay button for now — replace with payment gateway webhook later
   fastify.post(
     "/billing/pay/:billingId",
     {
       schema: {
         tags: ["Billing"],
-        summary: "Mark a bill as paid (lab side — will be payment gateway later)",
+        summary: "Mark a bill as paid (payment gateway later)",
         params: {
           type: "object",
           required: ["billingId"],
@@ -123,7 +124,6 @@ async function billingRoutes(fastify) {
           return reply.code(404).send({ error: "Bill not found or already paid" });
         }
 
-        // Same process — direct cache invalidation, instant unblock
         fastify.invalidateBillingCache(labId);
 
         return reply.send({ success: true });

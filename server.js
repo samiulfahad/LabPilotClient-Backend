@@ -38,8 +38,10 @@ const fastify = Fastify({
   },
 });
 
+// ── 1. Cookies
 await fastify.register(fastifyCookie);
 
+// ── 2. CORS
 await fastify.register(cors, {
   origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "http://localhost:5173", "http://localhost:5174"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -47,11 +49,14 @@ await fastify.register(cors, {
   credentials: true,
 });
 
+// ── 3. MongoDB
 await fastify.register(mongodb, {
+  forceClose: true,
   url: process.env.MONGODB_URI,
   database: "labpilot",
 });
 
+// ── 4. DB indexes
 try {
   await ensureIndexes(fastify.mongo.db);
   fastify.log.info("DB indexes ensured");
@@ -60,10 +65,12 @@ try {
   process.exit(1);
 }
 
+// ── 5. Plugins
 await fastify.register(authPlugin);
 await fastify.register(smsPlugin);
 await fastify.register(billingGuardPlugin);
 
+// ── 6. Swagger
 await fastify.register(swagger, {
   openapi: {
     info: {
@@ -81,6 +88,7 @@ await fastify.register(swaggerUi, {
   staticCSP: true,
 });
 
+// ── 7. Routes
 const API = "/v1";
 
 fastify.register(authRoutes, { prefix: API });
@@ -98,6 +106,7 @@ fastify.register(internalRoutes); // no /v1 prefix — internal only
 
 fastify.get("/", async (req, reply) => reply.send("Lab API OK"));
 
+// ── 8. Start
 try {
   await fastify.listen({ port: process.env.LAB_PORT || 3000, host: "0.0.0.0" });
 } catch (err) {
@@ -105,131 +114,18 @@ try {
   process.exit(1);
 }
 
+// ── 9. Cron — runs at 00:01 on 1st of every month, Dhaka time
 const cronSchedule = process.env.BILLING_CRON_SCHEDULE || "1 0 1 * *";
 cron.schedule(
   cronSchedule,
-  () => {
+  async () => {
     fastify.log.info("[cron] Starting billing job");
-    generateMonthlyBills(fastify.mongo.db).catch((err) => fastify.log.error({ err }, "[cron] Billing job failed"));
+    try {
+      const result = await generateMonthlyBills(fastify.mongo.db);
+      fastify.log.info({ result }, "[cron] Billing job complete");
+    } catch (err) {
+      fastify.log.error({ err }, "[cron] Billing job failed");
+    }
   },
-  {
-    timezone: "Asia/Dhaka",
-  },
+  { timezone: "Asia/Dhaka" },
 );
-
-
-// import Fastify from "fastify";
-// import cors from "@fastify/cors";
-// import mongodb from "@fastify/mongodb";
-// import swagger from "@fastify/swagger";
-// import swaggerUi from "@fastify/swagger-ui";
-// import fastifyCookie from "@fastify/cookie";
-// import dotenv from "dotenv";
-
-// import authPlugin from "./plugins/auth.js";
-// import smsPlugin from "./plugins/sms.js";
-// import { ensureIndexes } from "./db/indexes.js";
-
-// import authRoutes from "./routes/auth/auth.js";
-// import referrerRoutes from "./routes/referrer/referrer.js";
-// import staffRoutes from "./routes/staff/staff.js";
-// import testRoutes from "./routes/test/test.js";
-// import invoiceRoutes from "./routes/invoice/invoice.js";
-// import reportRoutes from "./routes/report/report.js";
-// import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
-// import commissionRoutes from "./routes/commission/commission.js";
-// import transactionRoutes from "./routes/transaction/transaction.js";
-// import accountRoutes from "./routes/account/account.js";
-
-// dotenv.config();
-
-// const fastify = Fastify({
-//   disableRequestLogging: true,
-//   logger: {
-//     transport: {
-//       target: "pino-pretty",
-//       options: {
-//         ignore: "pid,hostname,level,time,reqId,req,res,responseTime",
-//       },
-//     },
-//   },
-// });
-
-// // ── 1. Cookie plugin — must be first so reply.setCookie is available everywhere
-// await fastify.register(fastifyCookie);
-
-// // ── 2. CORS — must be before routes so preflight OPTIONS requests are handled
-// await fastify.register(cors, {
-//   origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "http://localhost:5173", "http://localhost:5174"],
-//   // ✅ OPTIONS added — required for cross-origin preflight requests
-//   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-//   allowedHeaders: ["Content-Type", "Authorization"],
-//   credentials: true,
-// });
-
-// // ── 3. MongoDB
-// await fastify.register(mongodb, {
-//   url: process.env.MONGODB_URI,
-//   database: "labpilot",
-// });
-
-// // ── 4. Ensure DB indexes
-// try {
-//   await ensureIndexes(fastify.mongo.db);
-//   fastify.log.info("DB indexes ensured");
-// } catch (err) {
-//   fastify.log.error({ err }, "Could not ensure DB indexes — aborting");
-//   process.exit(1);
-// }
-
-// // ── 5. Auth plugin (decorates fastify.authenticate, fastify.authorize, etc.)
-// await fastify.register(authPlugin);
-
-// // ── 6. SMS plugin (decorates fastify.sendSMS)
-// await fastify.register(smsPlugin);
-
-// // ── 7. Swagger
-// await fastify.register(swagger, {
-//   openapi: {
-//     info: {
-//       title: "LabPilot API",
-//       description: "REST API for LabPilot Pro",
-//       version: "1.0.0",
-//     },
-//     servers: [
-//       {
-//         url: `http://localhost:${process.env.PORT || 5000}`,
-//         description: "Development server",
-//       },
-//     ],
-//   },
-// });
-
-// await fastify.register(swaggerUi, {
-//   routePrefix: "/docs",
-//   uiConfig: { docExpansion: "list", deepLinking: true },
-//   staticCSP: true,
-// });
-
-// // ── 8. Routes
-// const API = "/v1";
-
-// fastify.register(authRoutes, { prefix: API });
-// fastify.register(cashmemoRoutes, { prefix: API });
-// fastify.register(commissionRoutes, { prefix: API });
-// fastify.register(referrerRoutes, { prefix: API });
-// fastify.register(staffRoutes, { prefix: API });
-// fastify.register(testRoutes, { prefix: API });
-// fastify.register(invoiceRoutes, { prefix: API });
-// fastify.register(reportRoutes, { prefix: API });
-// fastify.register(transactionRoutes, { prefix: API });
-// fastify.register(accountRoutes, { prefix: API });
-
-// fastify.get("/", async (req, reply) => reply.send("Ok"));
-
-// try {
-//   await fastify.listen({ port: process.env.PORT || 3000, host: "0.0.0.0" });
-// } catch (err) {
-//   fastify.log.error(err);
-//   process.exit(1);
-// }
