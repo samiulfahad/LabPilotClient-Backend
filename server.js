@@ -93,7 +93,7 @@ fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 fastify.register(transactionRoutes, { prefix: API });
 fastify.register(accountRoutes, { prefix: API });
-fastify.register(labBillingRoutes, { prefix: API });
+fastify.register(billingRoutes, { prefix: API });
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
 fastify.get("/", async (req, reply) => reply.send("Lab API OK"));
