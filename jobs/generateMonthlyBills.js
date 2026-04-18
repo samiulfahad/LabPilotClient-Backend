@@ -21,7 +21,7 @@ export async function generateMonthlyBills(db, options = {}) {
 
   const labs = await db
     .collection("labs")
-    .find({ isActive: true }, { projection: { _id: 1, name: 1, billing: 1 } })
+    .find({ }, { projection: { _id: 1, name: 1, billing: 1 } })
     .toArray();
 
   let generated = 0;
