@@ -25,7 +25,7 @@ export async function generateMonthlyBills(db, options = {}) {
 
   const labs = await db
     .collection("labs")
-    .find({}, { projection: { _id: 1, name: 1, billing: 1 } })
+    .find({ "deletion.status": { $ne: true } }, { projection: { _id: 1, name: 1, billing: 1 } })
     .toArray();
 
   let generated = 0;
@@ -144,7 +144,10 @@ export async function retryFailedLabs(db, run) {
 
       const lab = await db
         .collection("labs")
-        .findOne({ _id: failed.labId }, { projection: { _id: 1, name: 1, billing: 1 } });
+        .findOne(
+          { _id: failed.labId, "deletion.status": { $ne: true } },
+          { projection: { _id: 1, name: 1, billing: 1 } },
+        );
 
       if (!lab) {
         stillFailing.push({ labId: failed.labId, error: "Lab not found" });
