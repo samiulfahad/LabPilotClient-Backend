@@ -4,14 +4,12 @@ import mongodb from "@fastify/mongodb";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import fastifyCookie from "@fastify/cookie";
-import cron from "node-cron";
 import dotenv from "dotenv";
 
 import authPlugin from "./plugins/auth.js";
 import smsPlugin from "./plugins/sms.js";
 import billingGuardPlugin from "./plugins/billingGuard.js";
 import { ensureIndexes } from "./db/indexes.js";
-import { generateMonthlyBills } from "./jobs/generateMonthlyBills.js";
 
 import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
@@ -43,7 +41,7 @@ await fastify.register(fastifyCookie);
 
 // ── 2. CORS
 await fastify.register(cors, {
-  origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "http://localhost:5173", "http://localhost:5174"],
+  origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "https://lpadmin.netlify.app", "http://localhost:5173", "http://localhost:5174"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
@@ -114,18 +112,4 @@ try {
   process.exit(1);
 }
 
-// ── 9. Cron — runs at 00:01 on 1st of every month, Dhaka time
-const cronSchedule = process.env.BILLING_CRON_SCHEDULE || "1 0 1 * *";
-cron.schedule(
-  cronSchedule,
-  async () => {
-    fastify.log.info("[cron] Starting billing job");
-    try {
-      const result = await generateMonthlyBills(fastify.mongo.db);
-      fastify.log.info({ result }, "[cron] Billing job complete");
-    } catch (err) {
-      fastify.log.error({ err }, "[cron] Billing job failed");
-    }
-  },
-  { timezone: "Asia/Dhaka" },
-);
+
