@@ -1,26 +1,37 @@
-// ── plugins/billingGuard.js ───────────────────────────────────────────────────
-//
-// Fastify plugin: checks whether a lab is blocked due to an overdue unpaid bill.
-// Results are cached for CACHE_TTL_MS to avoid hammering MongoDB on every request.
-//
-// A lab is blocked when:
-//   - it has at least one bill with status "unpaid"
-//   - AND the current UTC time is past that bill's dueDate
-
 import fp from "fastify-plugin";
+
+// ─── Billing Guard Plugin ─────────────────────────────────────────────────────
+//
+// Decorates fastify with:
+//   fastify.checkBillingBlocked(labIdObj) → Promise<boolean>
+//   fastify.invalidateBillingCache(labIdObj)
+//
+// A lab is "blocked" when it has an unpaid bill whose dueDate has passed.
+// dueDate is stored as a UTC epoch ms = 23:59:59.999 BST of the due calendar day.
+// Comparison is simply Date.now() > dueDate — no timezone conversion needed here.
+//
+// Cache TTL: 5 minutes. The cache is invalidated immediately when a bill is paid
+// (via fastify.invalidateBillingCache or the internal HTTP endpoint).
 
 async function billingGuardPlugin(fastify) {
   const cache = new Map();
-  const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  const CACHE_TTL_MS = 5 * 60 * 1000;
 
-  async function fetchBlockedStatus(labIdObj) {
-    // Find the most-recent unpaid bill for this lab
+  async function fetchBlockedStatus(labId) {
+    // Get the most recent unpaid bill for this lab.
+    // BUG FIX: the original code used findOne with a sort option in the projection
+    // object, which is not supported by the Node MongoDB driver. Use find().sort().limit(1).next() instead.
     const unpaidBill = await fastify.mongo.db
       .collection("billings")
-      .findOne({ labId: labIdObj, status: "unpaid" }, { projection: { dueDate: 1 }, sort: { billingPeriodStart: -1 } });
+      .find({ labId, status: "unpaid" }, { projection: { dueDate: 1 } })
+      .sort({ billingPeriodStart: -1 })
+      .limit(1)
+      .next();
 
     if (!unpaidBill) return false;
-    // dueDate is stored as UTC ms snapped to 23:59:59 BST
+
+    // dueDate is UTC ms = end of due day 23:59:59.999 BST.
+    // If now > dueDate the grace period has expired → blocked.
     return Date.now() > unpaidBill.dueDate;
   }
 
