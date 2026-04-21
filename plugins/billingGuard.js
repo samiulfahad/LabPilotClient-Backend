@@ -1,43 +1,45 @@
+// ── plugins/billingGuard.js  (client backend) ────────────────────────────────
+//
+// In-memory cache of blocked status per lab.
+// TTL: 5 minutes — avoids hammering MongoDB on every invoice creation.
+// Cache is invalidated immediately when a lab pays (or admin pays on their behalf).
+//
+// Usage in routes:
+//   const blocked = await fastify.checkBillingBlocked(labIdObjectId);
+//   if (blocked) return reply.code(402).send({ error: "Account overdue. Please pay your outstanding bill." });
+
 import fp from "fastify-plugin";
 
-// ─── Billing Guard Plugin ─────────────────────────────────────────────────────
-//
-// Decorates fastify with:
-//   fastify.checkBillingBlocked(labIdObj) → Promise<boolean>
-//   fastify.invalidateBillingCache(labIdObj)
-//
-// A lab is "blocked" when it has an unpaid bill whose dueDate has passed.
-// dueDate is stored as a UTC epoch ms = 23:59:59.999 BST of the due calendar day.
-// Comparison is simply Date.now() > dueDate — no timezone conversion needed here.
-//
-// Cache TTL: 5 minutes. The cache is invalidated immediately when a bill is paid
-// (via fastify.invalidateBillingCache or the internal HTTP endpoint).
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 async function billingGuardPlugin(fastify) {
+  // Map<labIdString, { blocked: boolean, expiresAt: number }>
   const cache = new Map();
-  const CACHE_TTL_MS = 5 * 60 * 1000;
 
   async function fetchBlockedStatus(labId) {
-    // Get the most recent unpaid bill for this lab.
-    // BUG FIX: the original code used findOne with a sort option in the projection
-    // object, which is not supported by the Node MongoDB driver. Use find().sort().limit(1).next() instead.
+    // A lab is blocked if it has ANY unpaid bill whose dueDate has passed.
+    // We only need to check the most recent unpaid bill (if it's overdue, the lab is blocked).
     const unpaidBill = await fastify.mongo.db
       .collection("billings")
-      .find({ labId, status: "unpaid" }, { projection: { dueDate: 1 } })
-      .sort({ billingPeriodStart: -1 })
-      .limit(1)
-      .next();
+      .findOne({ labId, status: "unpaid" }, { projection: { dueDate: 1 }, sort: { billingPeriodStart: -1 } });
 
-    if (!unpaidBill) return false;
+    if (!unpaidBill) return false; // No unpaid bill → not blocked
+    if (unpaidBill.dueDate == null) return false; // Shouldn't happen for unpaid, but safe guard
 
-    // dueDate is UTC ms = end of due day 23:59:59.999 BST.
-    // If now > dueDate the grace period has expired → blocked.
-    return Date.now() > unpaidBill.dueDate;
+    return Date.now() > unpaidBill.dueDate; // Pure UTC comparison — timezone-safe
   }
 
+  /**
+   * Returns true if the lab is blocked (overdue unpaid bill).
+   * Uses in-memory cache with 5-minute TTL.
+   *
+   * @param {import('mongodb').ObjectId} labIdObj
+   * @returns {Promise<boolean>}
+   */
   fastify.decorate("checkBillingBlocked", async (labIdObj) => {
     const key = labIdObj.toString();
     const cached = cache.get(key);
+
     if (cached && Date.now() < cached.expiresAt) return cached.blocked;
 
     const blocked = await fetchBlockedStatus(labIdObj);
@@ -45,6 +47,12 @@ async function billingGuardPlugin(fastify) {
     return blocked;
   });
 
+  /**
+   * Immediately removes a lab from the blocked cache.
+   * Call this after a lab pays their bill.
+   *
+   * @param {import('mongodb').ObjectId} labIdObj
+   */
   fastify.decorate("invalidateBillingCache", (labIdObj) => {
     cache.delete(labIdObj.toString());
   });

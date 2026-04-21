@@ -237,8 +237,21 @@ async function invoiceRoutes(fastify) {
     try {
       const { patient, referrer, tests, amount } = req.body;
 
-      if (amount.paid > amount.final) return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
+      if (amount.paid > amount.final) {
+        return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
+      }
 
+      // ── Billing guard ───────────────────────────────────────────────────
+      // Block invoice creation if the lab has an overdue unpaid bill.
+      const isBlocked = await fastify.checkBillingBlocked(labId(req));
+      if (isBlocked) {
+        return reply.code(402).send({
+          error:
+            "Your account has an overdue bill. Please clear your outstanding balance to continue creating invoices.",
+        });
+      }
+
+      // ── Generate unique invoice ID ──────────────────────────────────────
       let invoiceId;
       for (let i = 0; i < 5; i++) {
         const candidate = generateInvoiceId();
@@ -248,8 +261,9 @@ async function invoiceRoutes(fastify) {
         }
         await new Promise((r) => setTimeout(r, 10));
       }
-      if (!invoiceId)
+      if (!invoiceId) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
+      }
 
       await col().insertOne({
         labId: labId(req),
@@ -316,72 +330,72 @@ async function invoiceRoutes(fastify) {
   });
 
   // ── GET /invoice/search ───────────────────────────────────────────────────
-fastify.get(
-  "/invoice/search",
-  {
-    schema: {
-      tags: ["Invoices"],
-      summary: "Search invoices by phone, invoiceId, or patient name",
-      querystring: {
-        type: "object",
-        required: ["q"],
-        properties: {
-          q: { type: "string", minLength: 1, maxLength: 100 },
+  fastify.get(
+    "/invoice/search",
+    {
+      schema: {
+        tags: ["Invoices"],
+        summary: "Search invoices by phone, invoiceId, or patient name",
+        querystring: {
+          type: "object",
+          required: ["q"],
+          properties: {
+            q: { type: "string", minLength: 1, maxLength: 100 },
+          },
         },
       },
     },
-  },
-  async (req, reply) => {
-    try {
-      const q = req.query.q.trim();
-      // ── Detect query type ──────────────────────────────────────────────
-      const isPhone    = /^\d{7,15}$/.test(q);
-      const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
-      const isName     = !isPhone && !isInvoiceId;
+    async (req, reply) => {
+      try {
+        const q = req.query.q.trim();
+        // ── Detect query type ──────────────────────────────────────────────
+        const isPhone = /^\d{7,15}$/.test(q);
+        const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
+        const isName = !isPhone && !isInvoiceId;
 
-      const baseMatch = {
-        labId: labId(req),
-        "deletion.status": false
-      };
+        const baseMatch = {
+          labId: labId(req),
+          "deletion.status": false,
+        };
 
-      let filter;
-      if (isPhone) {
-        filter = { ...baseMatch, "patient.contactNumber": q };
-      } else if (isInvoiceId) {
-        filter = { ...baseMatch, invoiceId: q.toUpperCase() };
-      } else {
-        // name — case-insensitive prefix search
-        filter = { ...baseMatch, "patient.name": { $regex: q, $options: "i" } };
+        let filter;
+        if (isPhone) {
+          filter = { ...baseMatch, "patient.contactNumber": q };
+        } else if (isInvoiceId) {
+          filter = { ...baseMatch, invoiceId: q.toUpperCase() };
+        } else {
+          // name — case-insensitive prefix search
+          filter = { ...baseMatch, "patient.name": { $regex: q, $options: "i" } };
+        }
+
+        const results = await col()
+          .find(filter, {
+            projection: {
+              _id: 1,
+              invoiceId: 1,
+              createdAt: 1,
+              "createdBy.name": 1,
+              "delivery.status": 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "tests.schemaId": 1,
+            },
+          })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .toArray();
+
+        return reply.send({ results, type: isPhone ? "phone" : isInvoiceId ? "invoiceId" : "name" });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Search failed" });
       }
-
-      const results = await col()
-        .find(filter, {
-          projection: {
-            _id: 1,
-            invoiceId: 1,
-            createdAt: 1,
-            "createdBy.name": 1,
-            "delivery.status": 1,
-            "patient.name": 1,
-            "patient.gender": 1,
-            "patient.age": 1,
-            "patient.contactNumber": 1,
-            "amount.final": 1,
-            "amount.paid": 1,
-            "tests.schemaId": 1,
-          },
-        })
-        .sort({ createdAt: -1 })
-        .limit(30)
-        .toArray();
-
-      return reply.send({ results, type: isPhone ? "phone" : isInvoiceId ? "invoiceId" : "name" });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Search failed" });
-    }
-  },
-);
+    },
+  );
 
   // ── PATCH /invoice/:invoiceId/collect-due ─────────────────────────────────
   fastify.patch(
