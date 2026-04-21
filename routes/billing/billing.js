@@ -1,3 +1,5 @@
+// ── routes/client/billingRoutes.js ────────────────────────────────────────────
+
 import toObjectId from "../../utils/db.js";
 
 async function billingRoutes(fastify) {
@@ -5,13 +7,13 @@ async function billingRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  // ── GET /billing/status ──────────────────────────────────────────────────
+  // ── GET /billing/status ────────────────────────────────────────────────────
   fastify.get(
     "/billing/status",
     {
       schema: {
         tags: ["Billing"],
-        summary: "Get current unpaid bill status for the lab",
+        summary: "Get current unpaid bill status for the authenticated lab",
       },
     },
     async (req, reply) => {
@@ -31,7 +33,7 @@ async function billingRoutes(fastify) {
           bill: {
             id: unpaidBill._id,
             amount: unpaidBill.totalAmount,
-            dueDate: unpaidBill.dueDate,
+            dueDate: unpaidBill.dueDate, // UTC ms
             billingPeriod: unpaidBill.billingPeriodStart,
             invoiceCount: unpaidBill.invoiceCount,
             breakdown: unpaidBill.breakdown,
@@ -44,13 +46,13 @@ async function billingRoutes(fastify) {
     },
   );
 
-  // ── GET /billing/history ─────────────────────────────────────────────────
+  // ── GET /billing/history ───────────────────────────────────────────────────
   fastify.get(
     "/billing/history",
     {
       schema: {
         tags: ["Billing"],
-        summary: "Get billing history for the lab (last 24 months)",
+        summary: "Get billing history for the authenticated lab (last 24 months)",
       },
     },
     async (req, reply) => {
@@ -84,14 +86,14 @@ async function billingRoutes(fastify) {
     },
   );
 
-  // ── POST /billing/pay/:billingId ─────────────────────────────────────────
-  // Simple pay button for now — replace with payment gateway webhook later
+  // ── POST /billing/pay/:billingId ───────────────────────────────────────────
+  // Placeholder — replace with payment gateway webhook when ready.
   fastify.post(
     "/billing/pay/:billingId",
     {
       schema: {
         tags: ["Billing"],
-        summary: "Mark a bill as paid (payment gateway later)",
+        summary: "Mark a bill as paid (payment gateway integration later)",
         params: {
           type: "object",
           required: ["billingId"],
@@ -106,11 +108,7 @@ async function billingRoutes(fastify) {
         const labId = toObjectId(req.user.labId);
 
         const result = await col().updateOne(
-          {
-            _id: toObjectId(req.params.billingId),
-            labId,
-            status: "unpaid",
-          },
+          { _id: toObjectId(req.params.billingId), labId, status: "unpaid" },
           {
             $set: {
               status: "paid",
@@ -125,7 +123,6 @@ async function billingRoutes(fastify) {
         }
 
         fastify.invalidateBillingCache(labId);
-
         return reply.send({ success: true });
       } catch (err) {
         req.log.error(err);
