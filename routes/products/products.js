@@ -10,6 +10,7 @@ const productBodySchema = {
     name: { type: "string", minLength: 1, maxLength: 100 },
     price: { type: "number", minimum: 0, maximum: 10000000 },
     description: { type: "string", maxLength: 500 },
+    hasStock: { type: "boolean", default: false },
     stock: { type: "integer", minimum: 0, default: 0 },
   },
 };
@@ -43,6 +44,8 @@ const stockAdjustSchema = {
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+
+const LAB_PRODUCT_LIMIT = 500;
 
 async function productRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("products");
@@ -138,8 +141,17 @@ async function productRoutes(fastify) {
     },
     async (req, reply) => {
       try {
-        const { name, price, description, stock = 0 } = req.body;
+        const { name, price, description, hasStock = false, stock = 0 } = req.body;
 
+        // ── 500-product limit ──────────────────────────────────────────────
+        const count = await col().countDocuments({ labId: labId(req), isDeleted: false });
+        if (count >= LAB_PRODUCT_LIMIT) {
+          return reply.code(403).send({
+            error: `Product limit reached. Each lab can have a maximum of ${LAB_PRODUCT_LIMIT} products.`,
+          });
+        }
+
+        // ── Duplicate name check ───────────────────────────────────────────
         const exists = await col().findOne(
           { labId: labId(req), name: { $regex: `^${name.trim()}$`, $options: "i" }, isDeleted: false },
           { projection: { _id: 1 } },
@@ -152,7 +164,9 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
-          stock,
+          hasStock,
+          // Only persist stock value when stock tracking is enabled
+          stock: hasStock ? stock : null,
           createdAt: now,
           updatedAt: now,
           createdBy: { id: userId(req), name: req.user.name },
@@ -161,10 +175,11 @@ async function productRoutes(fastify) {
 
         return reply.code(201).send({
           _id: result.insertedId,
-          name,
+          name: name.trim(),
           price,
           description: description?.trim() ?? null,
-          stock,
+          hasStock,
+          stock: hasStock ? stock : null,
         });
       } catch (err) {
         req.log.error(err);
@@ -189,6 +204,7 @@ async function productRoutes(fastify) {
             name: { type: "string", minLength: 1, maxLength: 100 },
             price: { type: "number", minimum: 0, maximum: 10000000 },
             description: { type: ["string", "null"], maxLength: 500 },
+            hasStock: { type: "boolean" },
             stock: { type: "integer", minimum: 0 },
           },
         },
@@ -197,14 +213,15 @@ async function productRoutes(fastify) {
     async (req, reply) => {
       try {
         const { productId } = req.params;
-        const { name, price, description, stock } = req.body;
+        const { name, price, description, hasStock, stock } = req.body;
 
         const product = await col().findOne(
           { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
-          { projection: { _id: 1 } },
+          { projection: { _id: 1, hasStock: 1 } },
         );
         if (!product) return reply.code(404).send({ error: "Product not found" });
 
+        // ── Duplicate name check ───────────────────────────────────────────
         if (name) {
           const duplicate = await col().findOne({
             _id: { $ne: toObjectId(productId) },
@@ -215,11 +232,22 @@ async function productRoutes(fastify) {
           if (duplicate) return reply.code(409).send({ error: "A product with this name already exists" });
         }
 
+        // Determine the effective hasStock after this update
+        const effectiveHasStock = hasStock !== undefined ? hasStock : product.hasStock;
+
         const update = { updatedAt: Date.now() };
         if (name !== undefined) update.name = name.trim();
         if (price !== undefined) update.price = price;
         if (description !== undefined) update.description = description?.trim() ?? null;
-        if (stock !== undefined) update.stock = stock;
+        if (hasStock !== undefined) {
+          update.hasStock = hasStock;
+          // When disabling stock tracking, null out stock
+          if (!hasStock) update.stock = null;
+        }
+        // Only allow stock changes when stock tracking is (or will be) active
+        if (stock !== undefined && effectiveHasStock) {
+          update.stock = stock;
+        }
 
         await col().updateOne({ _id: toObjectId(productId), labId: labId(req) }, { $set: update });
         return reply.send({ success: true, ...update });
@@ -248,9 +276,14 @@ async function productRoutes(fastify) {
 
         const product = await col().findOne(
           { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
-          { projection: { _id: 1, stock: 1 } },
+          { projection: { _id: 1, stock: 1, hasStock: 1 } },
         );
         if (!product) return reply.code(404).send({ error: "Product not found" });
+
+        // Guard: reject if this product doesn't track stock
+        if (!product.hasStock) {
+          return reply.code(400).send({ error: "This product does not track stock" });
+        }
 
         const currentStock = product.stock ?? 0;
         const newStock = currentStock + delta;
