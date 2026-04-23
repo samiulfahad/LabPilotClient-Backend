@@ -15,6 +15,7 @@ import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
 import testRoutes from "./routes/test/test.js";
+import productRoutes from "./routes/products/products.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
@@ -22,7 +23,9 @@ import commissionRoutes from "./routes/commission/commission.js";
 import transactionRoutes from "./routes/transaction/transaction.js";
 import accountRoutes from "./routes/account/account.js";
 import billingRoutes from "./routes/billing/billing.js";
+
 import internalRoutes from "./routes/internal/internal.js";
+
 
 dotenv.config();
 
@@ -95,6 +98,7 @@ fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
 fastify.register(staffRoutes, { prefix: API });
 fastify.register(testRoutes, { prefix: API });
+fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
 fastify.register(transactionRoutes, { prefix: API });
