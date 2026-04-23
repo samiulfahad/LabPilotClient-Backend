@@ -10,6 +10,7 @@ const productBodySchema = {
     name: { type: "string", minLength: 1, maxLength: 100 },
     price: { type: "number", minimum: 0, maximum: 10000000 },
     description: { type: "string", maxLength: 500 },
+    stock: { type: "integer", minimum: 0, default: 0 },
   },
 };
 
@@ -28,6 +29,16 @@ const productQuerySchema = {
     search: { type: "string", maxLength: 100, default: "" },
     page: { type: "integer", minimum: 1, default: 1 },
     limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+  },
+};
+
+const stockAdjustSchema = {
+  type: "object",
+  required: ["delta"],
+  additionalProperties: false,
+  properties: {
+    delta: { type: "integer" }, // positive = add, negative = remove
+    note: { type: "string", maxLength: 200 },
   },
 };
 
@@ -127,7 +138,7 @@ async function productRoutes(fastify) {
     },
     async (req, reply) => {
       try {
-        const { name, price, description } = req.body;
+        const { name, price, description, stock = 0 } = req.body;
 
         const exists = await col().findOne(
           { labId: labId(req), name: { $regex: `^${name.trim()}$`, $options: "i" }, isDeleted: false },
@@ -141,6 +152,7 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
+          stock,
           createdAt: now,
           updatedAt: now,
           createdBy: { id: userId(req), name: req.user.name },
@@ -152,6 +164,7 @@ async function productRoutes(fastify) {
           name,
           price,
           description: description?.trim() ?? null,
+          stock,
         });
       } catch (err) {
         req.log.error(err);
@@ -176,6 +189,7 @@ async function productRoutes(fastify) {
             name: { type: "string", minLength: 1, maxLength: 100 },
             price: { type: "number", minimum: 0, maximum: 10000000 },
             description: { type: ["string", "null"], maxLength: 500 },
+            stock: { type: "integer", minimum: 0 },
           },
         },
       },
@@ -183,7 +197,7 @@ async function productRoutes(fastify) {
     async (req, reply) => {
       try {
         const { productId } = req.params;
-        const { name, price, description } = req.body;
+        const { name, price, description, stock } = req.body;
 
         const product = await col().findOne(
           { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
@@ -205,12 +219,65 @@ async function productRoutes(fastify) {
         if (name !== undefined) update.name = name.trim();
         if (price !== undefined) update.price = price;
         if (description !== undefined) update.description = description?.trim() ?? null;
+        if (stock !== undefined) update.stock = stock;
 
         await col().updateOne({ _id: toObjectId(productId), labId: labId(req) }, { $set: update });
         return reply.send({ success: true, ...update });
       } catch (err) {
         req.log.error(err);
         return reply.code(500).send({ error: "Failed to update product" });
+      }
+    },
+  );
+
+  // ── POST /products/:productId/stock/adjust ────────────────────────────────
+  fastify.post(
+    "/products/:productId/stock/adjust",
+    {
+      schema: {
+        tags: ["Products"],
+        summary: "Adjust product stock by a delta (positive or negative)",
+        params: productIdParamSchema,
+        body: stockAdjustSchema,
+      },
+    },
+    async (req, reply) => {
+      try {
+        const { productId } = req.params;
+        const { delta, note } = req.body;
+
+        const product = await col().findOne(
+          { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
+          { projection: { _id: 1, stock: 1 } },
+        );
+        if (!product) return reply.code(404).send({ error: "Product not found" });
+
+        const currentStock = product.stock ?? 0;
+        const newStock = currentStock + delta;
+        if (newStock < 0) {
+          return reply.code(400).send({ error: "Stock cannot go below zero" });
+        }
+
+        await col().updateOne(
+          { _id: toObjectId(productId), labId: labId(req) },
+          {
+            $set: {
+              stock: newStock,
+              updatedAt: Date.now(),
+              lastStockAdjustment: {
+                delta,
+                note: note ?? null,
+                by: { id: userId(req), name: req.user.name },
+                at: Date.now(),
+              },
+            },
+          },
+        );
+
+        return reply.send({ success: true, stock: newStock });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to adjust stock" });
       }
     },
   );
