@@ -21,6 +21,16 @@ const productIdParamSchema = {
   },
 };
 
+const productQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    search: { type: "string", maxLength: 100, default: "" },
+    page: { type: "integer", minimum: 1, default: 1 },
+    limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+  },
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function productRoutes(fastify) {
@@ -36,16 +46,42 @@ async function productRoutes(fastify) {
     {
       schema: {
         tags: ["Products"],
-        summary: "Get all products for the lab",
+        summary: "Get all products for the lab (search + pagination)",
+        querystring: productQuerySchema,
       },
     },
     async (req, reply) => {
       try {
-        const products = await col()
-          .find({ labId: labId(req), isDeleted: false }, { projection: { labId: 0 } })
-          .sort({ createdAt: -1 })
-          .toArray();
-        return reply.send({ products });
+        const { search = "", page = 1, limit = 50 } = req.query;
+        const skip = (page - 1) * limit;
+
+        const filter = { labId: labId(req), isDeleted: false };
+        if (search.trim()) {
+          filter.$or = [
+            { name: { $regex: search.trim(), $options: "i" } },
+            { description: { $regex: search.trim(), $options: "i" } },
+          ];
+        }
+
+        const [products, total] = await Promise.all([
+          col()
+            .find(filter, { projection: { labId: 0 } })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray(),
+          col().countDocuments(filter),
+        ]);
+
+        return reply.send({
+          products,
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
+        });
       } catch (err) {
         req.log.error(err);
         return reply.code(500).send({ error: "Failed to fetch products" });
@@ -93,7 +129,6 @@ async function productRoutes(fastify) {
       try {
         const { name, price, description } = req.body;
 
-        // Duplicate name check within the lab
         const exists = await col().findOne(
           { labId: labId(req), name: { $regex: `^${name.trim()}$`, $options: "i" }, isDeleted: false },
           { projection: { _id: 1 } },
@@ -112,7 +147,12 @@ async function productRoutes(fastify) {
           isDeleted: false,
         });
 
-        return reply.code(201).send({ _id: result.insertedId, name, price, description: description?.trim() ?? null });
+        return reply.code(201).send({
+          _id: result.insertedId,
+          name,
+          price,
+          description: description?.trim() ?? null,
+        });
       } catch (err) {
         req.log.error(err);
         return reply.code(500).send({ error: "Failed to create product" });
@@ -151,7 +191,6 @@ async function productRoutes(fastify) {
         );
         if (!product) return reply.code(404).send({ error: "Product not found" });
 
-        // Duplicate name check (exclude self)
         if (name) {
           const duplicate = await col().findOne({
             _id: { $ne: toObjectId(productId) },
@@ -168,7 +207,6 @@ async function productRoutes(fastify) {
         if (description !== undefined) update.description = description?.trim() ?? null;
 
         await col().updateOne({ _id: toObjectId(productId), labId: labId(req) }, { $set: update });
-
         return reply.send({ success: true, ...update });
       } catch (err) {
         req.log.error(err);
