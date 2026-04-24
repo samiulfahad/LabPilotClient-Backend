@@ -231,6 +231,7 @@ async function invoiceRoutes(fastify) {
   );
 
   // ── POST /invoice/add ─────────────────────────────────────────────────────
+  // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
       const { patient, referrer, tests, products = [], amount } = req.body;
@@ -248,6 +249,31 @@ async function invoiceRoutes(fastify) {
         });
       }
 
+      // ── Validate stock upfront ──────────────────────────────────────────
+      if (products.length > 0) {
+        const productCol = fastify.mongo.db.collection("products");
+        const productIds = products.map((p) => toObjectId(p.productId));
+
+        const dbProducts = await productCol
+          .find(
+            { _id: { $in: productIds }, labId: labId(req), hasStock: true },
+            { projection: { _id: 1, name: 1, stock: 1 } },
+          )
+          .toArray();
+
+        const stockMap = new Map(dbProducts.map((p) => [p._id.toString(), p]));
+
+        for (const p of products) {
+          const dbProduct = stockMap.get(p.productId);
+          if (!dbProduct) continue; // hasStock: false — skip
+          if (dbProduct.stock < p.quantity) {
+            return reply.code(400).send({
+              error: `Insufficient stock for "${dbProduct.name}". Available: ${dbProduct.stock}, requested: ${p.quantity}.`,
+            });
+          }
+        }
+      }
+
       // ── Generate unique invoice ID ──────────────────────────────────────
       let invoiceId;
       for (let i = 0; i < 5; i++) {
@@ -262,6 +288,7 @@ async function invoiceRoutes(fastify) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
       }
 
+      // ── Insert invoice ──────────────────────────────────────────────────
       await col().insertOne({
         labId: labId(req),
         labKey: req.user.labKey,
@@ -288,7 +315,6 @@ async function invoiceRoutes(fastify) {
           schemaId: t.schemaId ? toObjectId(t.schemaId) : null,
           ...(t.schemaId && { report: {}, isCompleted: false }),
         })),
-        // ── products array — empty [] when none selected ─────────────────
         products: products.map((p) => ({
           productId: toObjectId(p.productId),
           name: p.name,
@@ -323,6 +349,27 @@ async function invoiceRoutes(fastify) {
           by: { id: null, name: null },
         },
       });
+
+      // ── Decrement stock for tracked products ────────────────────────────
+      if (products.length > 0) {
+        const productCol = fastify.mongo.db.collection("products");
+        await Promise.all(
+          products.map((p) =>
+            productCol.updateOne(
+              {
+                _id: toObjectId(p.productId),
+                labId: labId(req),
+                hasStock: true,
+                stock: { $gte: p.quantity },
+              },
+              {
+                $inc: { stock: -p.quantity },
+                $set: { updatedAt: Date.now() },
+              },
+            ),
+          ),
+        );
+      }
 
       return reply.code(201).send({
         invoiceId,
