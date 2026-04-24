@@ -10,6 +10,7 @@ const productBodySchema = {
     name: { type: "string", minLength: 1, maxLength: 100 },
     price: { type: "number", minimum: 0, maximum: 10000000 },
     description: { type: "string", maxLength: 500 },
+    unit: { type: "string", maxLength: 50 },
     hasStock: { type: "boolean", default: false },
     stock: { type: "integer", minimum: 0, default: 0 },
   },
@@ -69,7 +70,7 @@ async function productRoutes(fastify) {
         const { search = "", page = 1, limit = 50 } = req.query;
         const skip = (page - 1) * limit;
 
-        const filter = { labId: labId(req), isDeleted: false };
+        const filter = { labId: labId(req) };
         if (search.trim()) {
           filter.$or = [
             { name: { $regex: search.trim(), $options: "i" } },
@@ -118,7 +119,6 @@ async function productRoutes(fastify) {
         const product = await col().findOne({
           _id: toObjectId(req.params.productId),
           labId: labId(req),
-          isDeleted: false,
         });
         if (!product) return reply.code(404).send({ error: "Product not found" });
         return reply.send(product);
@@ -141,10 +141,10 @@ async function productRoutes(fastify) {
     },
     async (req, reply) => {
       try {
-        const { name, price, description, hasStock = false, stock = 0 } = req.body;
+        const { name, price, description, unit, hasStock = false, stock = 0 } = req.body;
 
         // ── 500-product limit ──────────────────────────────────────────────
-        const count = await col().countDocuments({ labId: labId(req), isDeleted: false });
+        const count = await col().countDocuments({ labId: labId(req) });
         if (count >= LAB_PRODUCT_LIMIT) {
           return reply.code(403).send({
             error: `Product limit reached. Each lab can have a maximum of ${LAB_PRODUCT_LIMIT} products.`,
@@ -153,7 +153,7 @@ async function productRoutes(fastify) {
 
         // ── Duplicate name check ───────────────────────────────────────────
         const exists = await col().findOne(
-          { labId: labId(req), name: { $regex: `^${name.trim()}$`, $options: "i" }, isDeleted: false },
+          { labId: labId(req), name: { $regex: `^${name.trim()}$`, $options: "i" } },
           { projection: { _id: 1 } },
         );
         if (exists) return reply.code(409).send({ error: "A product with this name already exists" });
@@ -164,13 +164,12 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
+          unit: unit?.trim() ?? null,
           hasStock,
-          // Only persist stock value when stock tracking is enabled
           stock: hasStock ? stock : null,
           createdAt: now,
           updatedAt: now,
           createdBy: { id: userId(req), name: req.user.name },
-          isDeleted: false,
         });
 
         return reply.code(201).send({
@@ -178,6 +177,7 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
+          unit: unit?.trim() ?? null,
           hasStock,
           stock: hasStock ? stock : null,
         });
@@ -204,6 +204,7 @@ async function productRoutes(fastify) {
             name: { type: "string", minLength: 1, maxLength: 100 },
             price: { type: "number", minimum: 0, maximum: 10000000 },
             description: { type: ["string", "null"], maxLength: 500 },
+            unit: { type: ["string", "null"], maxLength: 50 },
             hasStock: { type: "boolean" },
             stock: { type: "integer", minimum: 0 },
           },
@@ -213,10 +214,10 @@ async function productRoutes(fastify) {
     async (req, reply) => {
       try {
         const { productId } = req.params;
-        const { name, price, description, hasStock, stock } = req.body;
+        const { name, price, description, unit, hasStock, stock } = req.body;
 
         const product = await col().findOne(
-          { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
+          { _id: toObjectId(productId), labId: labId(req) },
           { projection: { _id: 1, hasStock: 1 } },
         );
         if (!product) return reply.code(404).send({ error: "Product not found" });
@@ -227,24 +228,21 @@ async function productRoutes(fastify) {
             _id: { $ne: toObjectId(productId) },
             labId: labId(req),
             name: { $regex: `^${name.trim()}$`, $options: "i" },
-            isDeleted: false,
           });
           if (duplicate) return reply.code(409).send({ error: "A product with this name already exists" });
         }
 
-        // Determine the effective hasStock after this update
         const effectiveHasStock = hasStock !== undefined ? hasStock : product.hasStock;
 
         const update = { updatedAt: Date.now() };
         if (name !== undefined) update.name = name.trim();
         if (price !== undefined) update.price = price;
         if (description !== undefined) update.description = description?.trim() ?? null;
+        if (unit !== undefined) update.unit = unit?.trim() ?? null;
         if (hasStock !== undefined) {
           update.hasStock = hasStock;
-          // When disabling stock tracking, null out stock
           if (!hasStock) update.stock = null;
         }
-        // Only allow stock changes when stock tracking is (or will be) active
         if (stock !== undefined && effectiveHasStock) {
           update.stock = stock;
         }
@@ -275,12 +273,11 @@ async function productRoutes(fastify) {
         const { delta, note } = req.body;
 
         const product = await col().findOne(
-          { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
+          { _id: toObjectId(productId), labId: labId(req) },
           { projection: { _id: 1, stock: 1, hasStock: 1 } },
         );
         if (!product) return reply.code(404).send({ error: "Product not found" });
 
-        // Guard: reject if this product doesn't track stock
         if (!product.hasStock) {
           return reply.code(400).send({ error: "This product does not track stock" });
         }
@@ -321,7 +318,7 @@ async function productRoutes(fastify) {
     {
       schema: {
         tags: ["Products"],
-        summary: "Soft delete a product",
+        summary: "Permanently delete a product",
         params: productIdParamSchema,
       },
     },
@@ -329,22 +326,12 @@ async function productRoutes(fastify) {
       try {
         const { productId } = req.params;
 
-        const product = await col().findOne(
-          { _id: toObjectId(productId), labId: labId(req), isDeleted: false },
-          { projection: { _id: 1 } },
-        );
-        if (!product) return reply.code(404).send({ error: "Product not found" });
+        const result = await col().deleteOne({
+          _id: toObjectId(productId),
+          labId: labId(req),
+        });
 
-        await col().updateOne(
-          { _id: toObjectId(productId), labId: labId(req) },
-          {
-            $set: {
-              isDeleted: true,
-              deletedAt: Date.now(),
-              deletedBy: { id: userId(req), name: req.user.name },
-            },
-          },
-        );
+        if (result.deletedCount === 0) return reply.code(404).send({ error: "Product not found" });
 
         return reply.send({ success: true });
       } catch (err) {

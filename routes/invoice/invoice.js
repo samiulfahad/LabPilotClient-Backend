@@ -119,49 +119,39 @@ const addInvoiceSchema = {
             },
           },
         },
+        // ── NEW: products/consumables ─────────────────────────────────────
+        products: {
+          type: "array",
+          minItems: 0,
+          maxItems: 100,
+          default: [],
+          description: "List of products/consumables used in this invoice",
+          items: {
+            type: "object",
+            required: ["productId", "name", "price", "quantity"],
+            additionalProperties: false,
+            properties: {
+              productId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the product" },
+              name: { type: "string", minLength: 1, maxLength: 100, description: "Name of the product" },
+              price: { type: "number", minimum: 0, maximum: 10000000, description: "Unit price of the product" },
+              unit: { type: ["string", "null"], maxLength: 50, description: "Unit label e.g. pcs, ml, mg" },
+              quantity: { type: "integer", minimum: 1, maximum: 10000, description: "Quantity used" },
+            },
+          },
+        },
         amount: {
           type: "object",
           required: ["initial", "referrerDiscount", "referrerCommission", "labAdjustment", "final", "net", "paid"],
           additionalProperties: false,
           description: "Invoice amount breakdown",
           properties: {
-            initial: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Sum of all test prices before adjustments",
-            },
-            referrerDiscount: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Discount given to patient via referrer",
-            },
-            referrerCommission: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Commission owed to referrer",
-            },
-            labAdjustment: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Additional lab-side adjustment",
-            },
-            final: { type: "number", minimum: 0, maximum: 10000000, description: "Final amount payable by patient" },
-            net: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Net amount earned by lab after deductions",
-            },
-            paid: {
-              type: "number",
-              minimum: 0,
-              maximum: 10000000,
-              description: "Amount paid at time of invoice creation",
-            },
+            initial: { type: "number", minimum: 0, maximum: 10000000 },
+            referrerDiscount: { type: "number", minimum: 0, maximum: 10000000 },
+            referrerCommission: { type: "number", minimum: 0, maximum: 10000000 },
+            labAdjustment: { type: "number", minimum: 0, maximum: 10000000 },
+            final: { type: "number", minimum: 0, maximum: 10000000 },
+            net: { type: "number", minimum: 0, maximum: 10000000 },
+            paid: { type: "number", minimum: 0, maximum: 10000000 },
           },
         },
       },
@@ -204,12 +194,12 @@ async function invoiceRoutes(fastify) {
       ...requireCreate,
       schema: {
         tags: ["Invoices"],
-        summary: "Fetch referrers and tests needed to create an invoice",
+        summary: "Fetch referrers, tests and products needed to create an invoice",
       },
     },
     async (req, reply) => {
       try {
-        const [referrers, tests] = await Promise.all([
+        const [referrers, tests, products] = await Promise.all([
           fastify.mongo.db
             .collection("referrers")
             .find(
@@ -223,8 +213,16 @@ async function invoiceRoutes(fastify) {
             .find({ labId: labId(req) }, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
             .sort({ createdAt: -1 })
             .toArray(),
+          // ── products: only active, expose stock so UI can show
+          //    out-of-stock warning and cap the quantity input
+          fastify.mongo.db
+            .collection("products")
+            .find({ labId: labId(req) }, { projection: { name: 1, price: 1, hasStock: 1, stock: 1, unit: 1 } })
+            .sort({ name: 1 })
+            .toArray(),
         ]);
-        return reply.send({ referrers, tests });
+
+        return reply.send({ referrers, tests, products });
       } catch (err) {
         req.log.error(err);
         return reply.code(500).send({ error: "Failed to fetch required data" });
@@ -235,14 +233,13 @@ async function invoiceRoutes(fastify) {
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
-      const { patient, referrer, tests, amount } = req.body;
+      const { patient, referrer, tests, products = [], amount } = req.body;
 
       if (amount.paid > amount.final) {
         return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
       }
 
       // ── Billing guard ───────────────────────────────────────────────────
-      // Block invoice creation if the lab has an overdue unpaid bill.
       const isBlocked = await fastify.checkBillingBlocked(labId(req));
       if (isBlocked) {
         return reply.code(402).send({
@@ -290,6 +287,14 @@ async function invoiceRoutes(fastify) {
           price: t.price,
           schemaId: t.schemaId ? toObjectId(t.schemaId) : null,
           ...(t.schemaId && { report: {}, isCompleted: false }),
+        })),
+        // ── products array — empty [] when none selected ─────────────────
+        products: products.map((p) => ({
+          productId: toObjectId(p.productId),
+          name: p.name,
+          price: p.price,
+          unit: p.unit ?? null,
+          quantity: p.quantity,
         })),
         amount: {
           initial: amount.initial,
@@ -348,15 +353,10 @@ async function invoiceRoutes(fastify) {
     async (req, reply) => {
       try {
         const q = req.query.q.trim();
-        // ── Detect query type ──────────────────────────────────────────────
         const isPhone = /^\d{7,15}$/.test(q);
         const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
-        const isName = !isPhone && !isInvoiceId;
 
-        const baseMatch = {
-          labId: labId(req),
-          "deletion.status": false,
-        };
+        const baseMatch = { labId: labId(req), "deletion.status": false };
 
         let filter;
         if (isPhone) {
@@ -364,7 +364,6 @@ async function invoiceRoutes(fastify) {
         } else if (isInvoiceId) {
           filter = { ...baseMatch, invoiceId: q.toUpperCase() };
         } else {
-          // name — case-insensitive prefix search
           filter = { ...baseMatch, "patient.name": { $regex: q, $options: "i" } };
         }
 
@@ -463,7 +462,7 @@ async function invoiceRoutes(fastify) {
             {
               labId: labId(req),
               "deletion.status": false,
-              ...(isStaff && { "createdBy.id": userId(req) }), // ✅ staff sees only their own
+              ...(isStaff && { "createdBy.id": userId(req) }),
               ...buildCursorFilter({ cursor, startDate, endDate }),
             },
             {
