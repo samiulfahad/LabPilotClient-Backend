@@ -7,55 +7,6 @@ async function authRoutes(fastify) {
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
   const otpCollection = () => fastify.mongo.db.collection("otps");
 
-  // ── POST /register ────────────────────────────────────────────────────────
-  fastify.post("/register", async (req, reply) => {
-    const { labKey, labId, phone, name, password, role, permissions, email } = req.body || {};
-
-    if (!labKey || !labId || !phone || !name || !password || !role || typeof permissions !== "object") {
-      return reply.code(400).send({ error: "Missing required fields" });
-    }
-
-    const allowedRoles = ["admin", "staff", "supportAdmin"];
-    if (!allowedRoles.includes(role)) {
-      return reply.code(400).send({ error: "Invalid role" });
-    }
-
-    const allowedPermissions = [
-      "createInvoice",
-      "editInvoice",
-      "deleteInvoice",
-      "cashmemo",
-      "uploadReport",
-      "downloadReport",
-    ];
-    const cleanPermissions = {};
-    for (const perm of allowedPermissions) {
-      cleanPermissions[perm] = Boolean(permissions[perm]);
-    }
-
-    const exists = await staffsCollection().findOne({ labKey, phone });
-    if (exists) return reply.code(409).send({ error: "Phone already registered in this lab" });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const result = await staffsCollection().insertOne({
-      labId: toObjectId(labId),
-      labKey,
-      name,
-      phone,
-      password: hashedPassword,
-      role,
-      permissions: cleanPermissions,
-      isActive: true,
-      isDeleted: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      ...(email && { email }),
-    });
-
-    return { message: "Staff created successfully", id: result.insertedId.toString() };
-  });
-
   // ── POST /login ───────────────────────────────────────────────────────────
   fastify.post("/login", async (req, reply) => {
     const { labKey, phone, password, device } = req.body || {};
