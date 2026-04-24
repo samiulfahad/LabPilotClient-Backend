@@ -119,7 +119,6 @@ const addInvoiceSchema = {
             },
           },
         },
-        // ── NEW: products/consumables ─────────────────────────────────────
         products: {
           type: "array",
           minItems: 0,
@@ -134,7 +133,6 @@ const addInvoiceSchema = {
               productId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the product" },
               name: { type: "string", minLength: 1, maxLength: 100, description: "Name of the product" },
               price: { type: "number", minimum: 0, maximum: 10000000, description: "Unit price of the product" },
-              unit: { type: ["string", "null"], maxLength: 50, description: "Unit label e.g. pcs, ml, mg" },
               quantity: { type: "integer", minimum: 1, maximum: 10000, description: "Quantity used" },
             },
           },
@@ -213,8 +211,6 @@ async function invoiceRoutes(fastify) {
             .find({ labId: labId(req) }, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
             .sort({ createdAt: -1 })
             .toArray(),
-          // ── products: only active, expose stock so UI can show
-          //    out-of-stock warning and cap the quantity input
           fastify.mongo.db
             .collection("products")
             .find({ labId: labId(req) }, { projection: { name: 1, price: 1, hasStock: 1, stock: 1 } })
@@ -230,7 +226,6 @@ async function invoiceRoutes(fastify) {
     },
   );
 
-  // ── POST /invoice/add ─────────────────────────────────────────────────────
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
@@ -319,7 +314,6 @@ async function invoiceRoutes(fastify) {
           productId: toObjectId(p.productId),
           name: p.name,
           price: p.price,
-          unit: p.unit ?? null,
           quantity: p.quantity,
         })),
         amount: {

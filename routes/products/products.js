@@ -10,7 +10,6 @@ const productBodySchema = {
     name: { type: "string", minLength: 1, maxLength: 100 },
     price: { type: "number", minimum: 0, maximum: 10000000 },
     description: { type: "string", maxLength: 500 },
-    unit: { type: "string", maxLength: 50 },
     hasStock: { type: "boolean", default: false },
     stock: { type: "integer", minimum: 0, default: 0 },
   },
@@ -141,7 +140,7 @@ async function productRoutes(fastify) {
     },
     async (req, reply) => {
       try {
-        const { name, price, description, unit, hasStock = false, stock = 0 } = req.body;
+        const { name, price, description, hasStock = false, stock = 0 } = req.body;
 
         // ── 500-product limit ──────────────────────────────────────────────
         const count = await col().countDocuments({ labId: labId(req) });
@@ -164,7 +163,6 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
-          unit: unit?.trim() ?? null,
           hasStock,
           stock: hasStock ? stock : null,
           createdAt: now,
@@ -177,7 +175,6 @@ async function productRoutes(fastify) {
           name: name.trim(),
           price,
           description: description?.trim() ?? null,
-          unit: unit?.trim() ?? null,
           hasStock,
           stock: hasStock ? stock : null,
         });
@@ -204,7 +201,6 @@ async function productRoutes(fastify) {
             name: { type: "string", minLength: 1, maxLength: 100 },
             price: { type: "number", minimum: 0, maximum: 10000000 },
             description: { type: ["string", "null"], maxLength: 500 },
-            unit: { type: ["string", "null"], maxLength: 50 },
             hasStock: { type: "boolean" },
             stock: { type: "integer", minimum: 0 },
           },
@@ -214,7 +210,7 @@ async function productRoutes(fastify) {
     async (req, reply) => {
       try {
         const { productId } = req.params;
-        const { name, price, description, unit, hasStock, stock } = req.body;
+        const { name, price, description, hasStock, stock } = req.body;
 
         const product = await col().findOne(
           { _id: toObjectId(productId), labId: labId(req) },
@@ -238,7 +234,6 @@ async function productRoutes(fastify) {
         if (name !== undefined) update.name = name.trim();
         if (price !== undefined) update.price = price;
         if (description !== undefined) update.description = description?.trim() ?? null;
-        if (unit !== undefined) update.unit = unit?.trim() ?? null;
         if (hasStock !== undefined) {
           update.hasStock = hasStock;
           if (!hasStock) update.stock = null;
