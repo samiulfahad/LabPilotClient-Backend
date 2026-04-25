@@ -1,0 +1,650 @@
+the invoice structure is now like this:
+{
+  "_id": {
+    "$oid": "69ebc3ae5b6686b74ab3a1a2"
+  },
+  "labId": {
+    "$oid": "69c56439abb7753549f107a4"
+  },
+  "labKey": 11111,
+  "invoiceId": "AJD5396",
+  "createdAt": 1777058734154,
+  "expiresAt": {
+    "$date": "2026-10-21T19:25:34.154Z"
+  },
+  "patient": {
+    "name": "miii",
+    "gender": "male",
+    "age": 34,
+    "contactNumber": "65476898798"
+  },
+  "referrer": {
+    "id": {
+      "$oid": "69c6557cc10757c2f9708cbd"
+    },
+    "name": "Dr. Mio ( MBBS, MD, FCPS )",
+    "type": "doctor"
+  },
+  "tests": [
+    {
+      "testId": {
+        "$oid": "69c62919a33fe3ba1675e011"
+      },
+      "name": "T4",
+      "price": 500,
+      "schemaId": null
+    },
+    {
+      "testId": {
+        "$oid": "69c628f5a33fe3ba1675e00e"
+      },
+      "name": "CBC",
+      "price": 300,
+      "schemaId": null
+    }
+  ],
+  "products": [
+    {
+      "productId": {
+        "$oid": "69ebb4dc5b6686b74ab3a19e"
+      },
+      "name": "Blood Kit",
+      "price": 100,
+      "quantity": 2
+    }
+  ],
+  "amount": {
+    "initial": 1000,
+    "referrerDiscount": 0,
+    "referrerCommission": 0,
+    "labAdjustment": 0,
+    "final": 1000,
+    "net": 1000,
+    "paid": 0
+  },
+  "createdBy": {
+    "id": {
+      "$oid": "69c95b8a3a013379c95101bc"
+    },
+    "name": "Samiul Fahad"
+  },
+  "delivery": {
+    "status": false,
+    "by": {
+      "id": {
+        "$oid": "69c95b8a3a013379c95101bc"
+      },
+      "name": "Samiul Fahad"
+    }
+  },
+  "collections": [],
+  "deletion": {
+    "status": false,
+    "at": null,
+    "by": {
+      "id": null,
+      "name": null
+    }
+  }
+}
+products array added. Now add the product stat here.
+import toObjectId from "../../utils/db.js";
+
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
+const summaryQuerySchema = {
+  schema: {
+    tags: ["Cashmemo"],
+    summary: "Get cash memo summary for a date range",
+    querystring: {
+      type: "object",
+      required: ["startDate", "endDate"],
+      properties: {
+        startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
+        endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
+      },
+    },
+  },
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+async function cashmemoRoutes(fastify) {
+  const col = () => fastify.mongo.db.collection("invoices");
+  const labId = (req) => toObjectId(req.user.labId);
+
+  fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("cashmemo"));
+
+  // ── GET /cashmemo/summary ─────────────────────────────────────────────────
+  fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
+    try {
+      const startDate = parseInt(req.query.startDate);
+      const endDate   = parseInt(req.query.endDate);
+
+      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+
+      const [result] = await col()
+        .aggregate(
+          [
+            {
+              $match: {
+                labId: labId(req),
+                createdAt: { $gte: startDate, $lte: endDate },
+              },
+            },
+            {
+              $facet: {
+                active: [
+                  { $match: { "deletion.status": false } },
+                  {
+                    $group: {
+                      _id: null,
+                      totalInvoices: { $sum: 1 },
+                      initial: { $sum: { $ifNull: ["$amount.initial", 0] } },
+                      labAdjustment: { $sum: { $ifNull: ["$amount.labAdjustment", 0] } },
+                      referrerDiscount: { $sum: { $ifNull: ["$amount.referrerDiscount", 0] } },
+                      referrerCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
+                      totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
+                      totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
+                      totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
+                      deliveredCount: {
+                        $sum: { $cond: [{ $eq: ["$delivery.status", true] }, 1, 0] },
+                      },
+                      fullyPaidCount: {
+                        $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
+                      },
+                    },
+                  },
+                  {
+                    $project: {
+                      _id: 0,
+                      totalInvoices: 1,
+                      initial: 1,
+                      labAdjustment: 1,
+                      referrerDiscount: 1,
+                      referrerCommission: 1,
+                      totalFinal: 1,
+                      totalNet: 1,
+                      totalPaid: 1,
+                      totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
+                      deliveredCount: 1,
+                      fullyPaidCount: 1,
+                    },
+                  },
+                ],
+                deleted: [{ $match: { "deletion.status": true } }, { $count: "deletedCount" }],
+                testCounts: [
+                  { $match: { "deletion.status": false } },
+                  { $unwind: "$tests" },
+                  { $group: { _id: "$tests.name", count: { $sum: 1 } } },
+                  { $sort: { count: -1 } },
+                  { $limit: 20 },
+                  { $project: { _id: 0, name: "$_id", count: 1 } },
+                ],
+              },
+            },
+          ],
+          { allowDiskUse: true },
+        )
+        .toArray();
+
+      const active = result.active[0] ?? {
+        totalInvoices: 0,
+        initial: 0,
+        labAdjustment: 0,
+        referrerDiscount: 0,
+        referrerCommission: 0,
+        totalFinal: 0,
+        totalNet: 0,
+        totalPaid: 0,
+        totalDue: 0,
+        deliveredCount: 0,
+        fullyPaidCount: 0,
+      };
+
+      return reply.send({
+        ...active,
+        deletedCount: result.deleted[0]?.deletedCount ?? 0,
+        testCounts: result.testCounts ?? [],
+      });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch cash memo summary" });
+    }
+  });
+}
+
+export default cashmemoRoutes;
+
+also in frontend
+/**
+ * useCallback / useMemo are intentionally absent throughout this file.
+ * babel-plugin-react-compiler handles all memoization automatically.
+ */
+import { useState, useEffect } from "react";
+import {
+  ReceiptText,
+  Activity,
+  ArrowLeft,
+  Minus,
+  TrendingUp,
+  Wallet,
+  PackageCheck,
+  Clock,
+  AlertCircle,
+  Trash2,
+  Printer,
+  FlaskConical,
+  Banknote,
+} from "lucide-react";
+import { Link } from "react-router-dom";
+import TimeFrame from "../../components/timeFrame";
+import cashmemoService from "../../api/cashmemo";
+import Popup from "../../components/popup";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const fmt = (n) => (typeof n === "number" ? n.toLocaleString("en-IN") : "0");
+
+const buildHeadingLabel = (start, end) => {
+  if (!start || !end) return "";
+  const s = new Date(start);
+  const e = new Date(end);
+
+  const day = (d) => {
+    const n = d.getDate();
+    const sfx =
+      n % 10 === 1 && n % 100 !== 11
+        ? "st"
+        : n % 10 === 2 && n % 100 !== 12
+          ? "nd"
+          : n % 10 === 3 && n % 100 !== 13
+            ? "rd"
+            : "th";
+    return `${n}${sfx}`;
+  };
+  const monthYear = (d) => `${d.toLocaleString("en-US", { month: "long" })}, ${d.getFullYear()}`;
+
+  const sameDay = s.toDateString() === e.toDateString();
+  const sameMonth = s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear();
+
+  if (sameDay) return `${day(s)} ${monthYear(s)}`;
+  if (sameMonth) return `${s.getDate()} – ${e.getDate()} ${monthYear(s)}`;
+  return `${s.toLocaleString("en-US", { month: "short", day: "numeric" })} – ${e.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+};
+
+const todayRange = () => {
+  const now = new Date();
+  return {
+    start: new Date(now).setHours(0, 0, 0, 0),
+    end: new Date(now).setHours(23, 59, 59, 999),
+  };
+};
+
+// ─── Skeleton ─────────────────────────────────────────────────────────────────
+
+const SkeletonMemo = () => (
+  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden animate-pulse">
+    <div className="px-6 pt-5 pb-4 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-4">
+      <div className="space-y-2">
+        <div className="h-3 w-20 bg-gray-200 rounded-full" />
+        <div className="h-5 w-44 bg-gray-300 rounded-lg" />
+      </div>
+      <div className="text-right space-y-2">
+        <div className="h-3 w-24 bg-gray-200 rounded-full ml-auto" />
+        <div className="h-9 w-12 bg-gray-300 rounded-lg ml-auto" />
+      </div>
+    </div>
+    <div className="px-6 py-2 space-y-0">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="flex items-center justify-between py-3 border-b border-gray-50">
+          <div className="h-3.5 w-32 bg-gray-200 rounded" />
+          <div className="h-5 w-20 bg-gray-200 rounded-lg" />
+        </div>
+      ))}
+      <div className="h-24 w-full bg-emerald-50 border border-emerald-100 rounded-xl my-3" />
+      <div className="flex items-center justify-between py-3 border-b border-gray-50">
+        <div className="h-3.5 w-32 bg-gray-200 rounded" />
+        <div className="h-5 w-20 bg-gray-200 rounded-lg" />
+      </div>
+      <div className="flex items-center gap-2 my-3">
+        <div className="flex-1 h-px bg-gray-100" />
+        <div className="h-6 w-64 bg-gray-100 rounded-full" />
+        <div className="flex-1 h-px bg-gray-100" />
+      </div>
+      <div className="h-16 w-full bg-gray-200 rounded-xl mb-3" />
+      <div className="h-12 w-full bg-red-50 border border-red-100 rounded-xl mb-5" />
+    </div>
+    <div className="px-6 pb-5 border-t border-gray-100 pt-4">
+      <div className="h-3 w-16 bg-gray-200 rounded-full mb-3" />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="h-16 bg-gray-100 rounded-xl" />
+        <div className="h-16 bg-gray-100 rounded-xl" />
+      </div>
+    </div>
+    <div className="px-6 pb-6 border-t border-gray-100 pt-4">
+      <div className="h-3 w-24 bg-gray-200 rounded-full mb-3" />
+      <div className="flex flex-wrap gap-2">
+        {[80, 64, 96, 72, 56, 88].map((w) => (
+          <div key={w} className="h-7 bg-gray-100 rounded-full" style={{ width: w }} />
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+// ─── Stat Card ────────────────────────────────────────────────────────────────
+
+const StatCard = ({ icon: Icon, iconBg, iconColor, label, labelColor, value, valueBg, border }) => (
+  <div className={`flex items-center gap-3 ${valueBg} ${border} rounded-xl px-4 py-3`}>
+    <div className={`w-8 h-8 rounded-lg ${iconBg} flex items-center justify-center shrink-0`}>
+      <Icon className={`w-4 h-4 ${iconColor}`} />
+    </div>
+    <div>
+      <p className={`text-[11px] font-semibold ${labelColor} uppercase tracking-wide`}>{label}</p>
+      <p className="text-lg font-bold">{value}</p>
+    </div>
+  </div>
+);
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+const CashMemo = () => {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [popup, setPopup] = useState(null);
+  const [timeRange, setTimeRange] = useState(null);
+
+  useEffect(() => {
+    const range = todayRange();
+    setTimeRange(range);
+    fetchSummary(range);
+  }, []);
+
+  const fetchSummary = async (range) => {
+    try {
+      setLoading(true);
+      const res = await cashmemoService.getSummary({
+        startDate: range.start,
+        endDate: range.end,
+      });
+      setSummary(res.data);
+    } catch {
+      setPopup({ type: "error", message: "Failed to load cashmemo. Please try again." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFetchData = (start, end) => {
+    const range = { start, end };
+    setTimeRange(range);
+    fetchSummary(range);
+  };
+
+  const d = summary ?? {};
+  const pendingCount = (d.totalInvoices ?? 0) - (d.deliveredCount ?? 0);
+  const headingLabel = buildHeadingLabel(timeRange?.start, timeRange?.end);
+
+  // Gross Counter Amount = Total − Lab Adjustment − Referrer Discount
+  const grossCounterAmount = (d.initial ?? 0) - (d.labAdjustment ?? 0) - (d.referrerDiscount ?? 0);
+
+  return (
+    <section className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 px-4 py-6">
+      {popup && <Popup type={popup.type} message={popup.message} onClose={() => setPopup(null)} />}
+
+      <style>{`
+        @media print {
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body * { visibility: hidden; }
+          #cashmemo-printable, #cashmemo-printable * { visibility: visible; }
+          #cashmemo-printable { position: fixed; top: 0; left: 0; width: 100%; padding: 32px; box-shadow: none; border-radius: 0; }
+          .no-print { display: none !important; }
+        }
+      `}</style>
+
+      <div className="max-w-2xl mx-auto">
+        {/* Page header */}
+        <div className="flex items-center justify-between mb-5 no-print">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 flex items-center gap-2">
+              <ReceiptText className="w-7 h-7 text-indigo-600" /> Cashmemo
+            </h1>
+            <p className="text-sm text-gray-500 mt-1 flex items-center gap-1.5">
+              <Activity className="w-4 h-4 text-indigo-400" /> Financial summary by time frame
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              disabled={loading}
+              className="px-3 py-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all flex items-center gap-2 text-sm font-medium shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Printer className="w-4 h-4" /> Print
+            </button>
+            <Link
+              to="/lab-management"
+              className="px-3 py-2.5 rounded-xl border border-gray-200 bg-white/60 text-gray-700 hover:bg-gray-50 transition-all flex items-center gap-2 text-sm font-medium shadow-sm"
+            >
+              <ArrowLeft className="w-4 h-4" /> Back
+            </Link>
+          </div>
+        </div>
+
+        {/* TimeFrame picker */}
+        <div className="mb-5 no-print">
+          <TimeFrame onFetchData={handleFetchData} />
+        </div>
+
+        {/* Memo card */}
+        {loading ? (
+          <SkeletonMemo />
+        ) : (
+          <div
+            id="cashmemo-printable"
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
+          >
+            {/* Heading band */}
+            <div className="px-6 pt-5 pb-4 bg-gradient-to-r from-indigo-50/70 to-purple-50/40 border-b border-gray-100">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold text-indigo-500 uppercase tracking-widest mb-0.5">
+                    Cashmemo
+                  </p>
+                  <h2 className="text-lg font-extrabold text-gray-900 leading-tight">{headingLabel}</h2>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Total Invoices</p>
+                  <p className="text-3xl font-black text-gray-900">{d.totalInvoices ?? 0}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* P&L rows */}
+            <div className="px-6 py-2">
+              {/* Total Amount */}
+              <div className="flex items-center justify-between py-3 border-b border-gray-50">
+                <p className="text-sm font-semibold text-gray-800">Total Amount</p>
+                <p className="text-lg font-bold text-gray-900">৳{fmt(d.initial)}</p>
+              </div>
+
+              {/* Lab Adjustment */}
+              <div className="flex items-center justify-between py-3 border-b border-gray-50">
+                <div className="flex items-center gap-1.5">
+                  <Minus className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+                  <p className="text-sm font-semibold text-gray-700">Lab Adjustment</p>
+                </div>
+                <p className="text-base font-semibold text-yellow-600">− ৳{fmt(d.labAdjustment)}</p>
+              </div>
+
+              {/* Referrer's Discount */}
+              <div className="flex items-center justify-between py-3 border-b border-gray-50">
+                <div className="flex items-center gap-1.5">
+                  <Minus className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                  <p className="text-sm font-semibold text-gray-700">Referrer's Discount</p>
+                </div>
+                <p className="text-base font-semibold text-orange-500">− ৳{fmt(d.referrerDiscount)}</p>
+              </div>
+
+              {/* ── Gross Counter Amount ─────────────────────────────────────── */}
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 overflow-hidden my-3">
+                {/* Header row */}
+                <div className="flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                      <Banknote className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold text-emerald-100 uppercase tracking-widest">
+                        Gross Counter Amount
+                      </p>
+                      <p className="text-[10px] text-emerald-200 mt-0.5">Total − Lab Adj. − Discount</p>
+                    </div>
+                  </div>
+                  <p className="text-3xl font-black text-white tracking-tight">৳{fmt(grossCounterAmount)}</p>
+                </div>
+                {/* Collected / Due breakdown */}
+                <div className="grid grid-cols-2 divide-x divide-emerald-100">
+                  <div className="flex items-center gap-2.5 px-4 py-3">
+                    <div className="w-7 h-7 rounded-lg bg-green-100 flex items-center justify-center shrink-0">
+                      <Wallet className="w-3.5 h-3.5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Collected</p>
+                      <p className="text-base font-black text-green-700">৳{fmt(d.totalPaid)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2.5 px-4 py-3">
+                    <div className="w-7 h-7 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                      <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wide">Due</p>
+                      <p className="text-base font-black text-red-600">৳{fmt(d.totalDue)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Commission */}
+              <div className="flex items-center justify-between py-3 border-b border-dashed border-indigo-100">
+                <div className="flex items-center gap-1.5">
+                  <Minus className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <p className="text-sm font-black text-purple-700">Commission</p>
+                </div>
+                <p className="text-base font-black text-purple-700">− ৳{fmt(d.referrerCommission)}</p>
+              </div>
+
+              {/* Formula tag */}
+              <div className="flex items-center gap-2 my-3">
+                <div className="flex-1 h-px bg-gray-100" />
+                <span className="text-[10.5px] text-gray-400 font-mono bg-gray-50 border border-gray-100 rounded-full px-3 py-1 whitespace-nowrap">
+                  Total − Lab Adj. − Discount − Commission
+                </span>
+                <div className="flex-1 h-px bg-gray-100" />
+              </div>
+
+              {/* Net Earning */}
+              <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center">
+                    <TrendingUp className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold text-indigo-200 uppercase tracking-widest">Net Earning</p>
+                    <p className="text-[10px] text-indigo-300 mt-0.5">After all deductions</p>
+                  </div>
+                </div>
+                <p className="text-3xl font-black text-white tracking-tight">৳{fmt(d.totalNet)}</p>
+              </div>
+
+              {/* Tests ordered */}
+              {d.testCounts?.length > 0 && (
+                <div className="my-4 bg-gray-50 border border-gray-100 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FlaskConical className="w-3.5 h-3.5 text-indigo-400" />
+                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Tests Ordered</p>
+                    <div className="flex-1 h-px bg-gray-200" />
+                    <span className="text-[10px] font-semibold text-gray-400">
+                      {d.testCounts.reduce((s, t) => s + t.count, 0)} total
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {d.testCounts.map(({ name, count }, i) => (
+                      <div
+                        key={name}
+                        className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-3 py-2.5 gap-2"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-[10px] font-black text-gray-300 w-4 shrink-0">
+                            {String(i + 1).padStart(2, "0")}
+                          </span>
+                          <span className="text-sm font-bold text-gray-800 truncate">{name}</span>
+                        </div>
+                        <span className="text-sm font-black text-indigo-600 shrink-0">{count}×</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Deleted invoices */}
+              <div className="flex items-center justify-between px-4 py-3 bg-red-50 border border-red-200 rounded-xl mb-5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
+                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-red-600">Deleted Invoices</p>
+                    <p className="text-[11px] text-red-400 mt-0.5">Excluded from all calculations</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                  <p className="text-lg font-black text-red-600">{d.deletedCount ?? 0}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Delivery */}
+            <div className="px-6 pb-5 border-t border-gray-100 pt-4">
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Delivery</p>
+              <div className="grid grid-cols-2 gap-3">
+                <StatCard
+                  icon={PackageCheck}
+                  iconBg="bg-blue-100"
+                  iconColor="text-blue-600"
+                  label="Delivered"
+                  labelColor="text-blue-600"
+                  value={d.deliveredCount ?? 0}
+                  valueBg="bg-blue-50"
+                  border="border border-blue-100"
+                />
+                <StatCard
+                  icon={Clock}
+                  iconBg="bg-amber-100"
+                  iconColor="text-amber-600"
+                  label="Pending"
+                  labelColor="text-amber-700"
+                  value={pendingCount}
+                  valueBg="bg-amber-50"
+                  border="border border-amber-100"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <p className="text-center text-[11px] text-gray-400 mt-4 pb-6 no-print">
+          Net Earning = Total Amount − Lab Adjustment − Referrer Discount − Commission
+        </p>
+      </div>
+    </section>
+  );
+};
+
+export default CashMemo;
+
+in frontend isnt it better to place one test/product in a row and option to expand and collapse them
+
