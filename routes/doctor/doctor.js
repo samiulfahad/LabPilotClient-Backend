@@ -1,6 +1,7 @@
 import toObjectId from "../../utils/db.js";
 
 const collectionName = "doctors";
+const PAGE_SIZE = 20;
 
 // ─── Reusable Schema Fragments ────────────────────────────────────────────────
 
@@ -22,31 +23,13 @@ const doctorIdParamSchema = {
 // ─── Body Properties ──────────────────────────────────────────────────────────
 
 const doctorBodyProperties = {
-  name: { type: "string", minLength: 1, maxLength: 120, description: "Full name of the doctor" },
-  degree: { type: "string", maxLength: 200, description: "Academic degree(s) e.g. MBBS, MD (optional)" },
-  contactNumber: { type: "string", minLength: 1, maxLength: 20, description: "Phone / contact number" },
-  designation: {
-    type: "string",
-    maxLength: 100,
-    description: "Designation e.g. Professor, Consultant (optional)",
-  },
-  department: {
-    type: "string",
-    minLength: 1,
-    maxLength: 100,
-    description: "Department e.g. Cardiology, Medicine",
-  },
-  commissionType: {
-    type: "string",
-    enum: ["percentage", "fixed"],
-    description: "How commission is calculated",
-  },
-  commissionValue: {
-    type: "number",
-    minimum: 0,
-    description: "Commission amount (0–100 if percentage, any positive number if fixed BDT)",
-  },
-  isActive: { type: "boolean", description: "Whether the doctor is active (defaults to true)" },
+  name: { type: "string", minLength: 1, maxLength: 120 },
+  degree: { type: "string", maxLength: 200 },
+  contactNumber: { type: "string", minLength: 1, maxLength: 20 },
+  designation: { type: "string", maxLength: 100 },
+  department: { type: "string", minLength: 1, maxLength: 100 },
+  commissionType: { type: "string", enum: ["percentage", "fixed"] },
+  commissionValue: { type: "number", minimum: 0 },
 };
 
 // ─── Route Schemas ────────────────────────────────────────────────────────────
@@ -54,27 +37,20 @@ const doctorBodyProperties = {
 const getAllDoctorsSchema = {
   schema: {
     tags: ["Doctors"],
-    summary: "Get all doctors for the lab, with optional search and department filter",
+    summary: "Get paginated doctors with optional search and department filter",
     querystring: {
       type: "object",
       properties: {
-        search: {
-          type: "string",
-          maxLength: 100,
-          description: "Search across name, degree, contact, designation, department",
-        },
-        department: { type: "string", maxLength: 100, description: "Filter by exact department name" },
+        search: { type: "string", maxLength: 100 },
+        department: { type: "string", maxLength: 100 },
+        page: { type: "integer", minimum: 1, default: 1 },
       },
     },
   },
 };
 
 const getDoctorByIdSchema = {
-  schema: {
-    tags: ["Doctors"],
-    summary: "Get a single doctor by ID",
-    params: doctorIdParamSchema,
-  },
+  schema: { tags: ["Doctors"], summary: "Get a single doctor by ID", params: doctorIdParamSchema },
 };
 
 const createDoctorSchema = {
@@ -100,18 +76,13 @@ const updateDoctorSchema = {
       required: [],
       additionalProperties: false,
       minProperties: 1,
-      description: "At least one field must be provided",
       properties: doctorBodyProperties,
     },
   },
 };
 
 const deleteDoctorSchema = {
-  schema: {
-    tags: ["Doctors"],
-    summary: "Hard delete a doctor",
-    params: doctorIdParamSchema,
-  },
+  schema: { tags: ["Doctors"], summary: "Hard delete a doctor", params: doctorIdParamSchema },
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -125,7 +96,8 @@ async function doctorRoutes(fastify) {
   // ── GET /doctors ───────────────────────────────────────────────────────────
   fastify.get("/doctors", getAllDoctorsSchema, async (req, reply) => {
     try {
-      const { search, department } = req.query;
+      const { search, department, page = 1 } = req.query;
+      const skip = (page - 1) * PAGE_SIZE;
 
       const query = { labId: labId(req) };
 
@@ -144,7 +116,18 @@ async function doctorRoutes(fastify) {
         query.department = department.trim();
       }
 
-      return collection.find(query).sort({ name: 1 }).toArray();
+      const [doctors, total] = await Promise.all([
+        collection.find(query).sort({ name: 1 }).skip(skip).limit(PAGE_SIZE).toArray(),
+        collection.countDocuments(query),
+      ]);
+
+      return reply.send({
+        doctors,
+        total,
+        page,
+        totalPages: Math.ceil(total / PAGE_SIZE),
+        pageSize: PAGE_SIZE,
+      });
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch doctors" });
@@ -169,8 +152,7 @@ async function doctorRoutes(fastify) {
   // ── POST /doctor/add ───────────────────────────────────────────────────────
   fastify.post("/doctor/add", createDoctorSchema, async (req, reply) => {
     try {
-      const { name, degree, contactNumber, designation, department, commissionType, commissionValue, isActive } =
-        req.body;
+      const { name, degree, contactNumber, designation, department, commissionType, commissionValue } = req.body;
 
       if (commissionType === "percentage" && commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
@@ -185,7 +167,6 @@ async function doctorRoutes(fastify) {
         department,
         commissionType,
         commissionValue,
-        isActive: isActive ?? true,
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
 
@@ -202,12 +183,16 @@ async function doctorRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid doctor ID" });
 
-      const { name, degree, contactNumber, designation, department, commissionType, commissionValue, isActive } =
-        req.body;
+      const { name, degree, contactNumber, designation, department, commissionType, commissionValue } = req.body;
 
-      // If both type and value are being updated, validate together
-      const effectiveType = commissionType ?? (await collection.findOne({ _id, labId: labId(req) }))?.commissionType;
-      if (effectiveType === "percentage" && commissionValue !== undefined && commissionValue > 100) {
+      // Fetch current type only if needed for cross-field validation
+      if (commissionValue !== undefined && commissionType === undefined) {
+        const existing = await collection.findOne({ _id, labId: labId(req) }, { projection: { commissionType: 1 } });
+        if (existing?.commissionType === "percentage" && commissionValue > 100) {
+          return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
+        }
+      }
+      if (commissionType === "percentage" && commissionValue !== undefined && commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
       }
 
@@ -219,7 +204,6 @@ async function doctorRoutes(fastify) {
         ...(department !== undefined && { department }),
         ...(commissionType !== undefined && { commissionType }),
         ...(commissionValue !== undefined && { commissionValue }),
-        ...(isActive !== undefined && { isActive }),
         updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       };
 
