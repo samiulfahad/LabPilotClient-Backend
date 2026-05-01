@@ -54,7 +54,18 @@ const doctorBodyProperties = {
 const getAllDoctorsSchema = {
   schema: {
     tags: ["Doctors"],
-    summary: "Get all doctors for the lab",
+    summary: "Get all doctors for the lab, with optional search and department filter",
+    querystring: {
+      type: "object",
+      properties: {
+        search: {
+          type: "string",
+          maxLength: 100,
+          description: "Search across name, degree, contact, designation, department",
+        },
+        department: { type: "string", maxLength: 100, description: "Filter by exact department name" },
+      },
+    },
   },
 };
 
@@ -114,10 +125,26 @@ async function doctorRoutes(fastify) {
   // ── GET /doctors ───────────────────────────────────────────────────────────
   fastify.get("/doctors", getAllDoctorsSchema, async (req, reply) => {
     try {
-      return collection
-        .find({ labId: labId(req) })
-        .sort({ name: 1 })
-        .toArray();
+      const { search, department } = req.query;
+
+      const query = { labId: labId(req) };
+
+      if (search?.trim()) {
+        const regex = { $regex: search.trim(), $options: "i" };
+        query.$or = [
+          { name: regex },
+          { degree: regex },
+          { contactNumber: regex },
+          { designation: regex },
+          { department: regex },
+        ];
+      }
+
+      if (department?.trim()) {
+        query.department = department.trim();
+      }
+
+      return collection.find(query).sort({ name: 1 }).toArray();
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch doctors" });
