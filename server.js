@@ -24,6 +24,7 @@ import transactionRoutes from "./routes/transaction/transaction.js";
 import accountRoutes from "./routes/account/account.js";
 import billingRoutes from "./routes/billing/billing.js";
 import doctorRoutes from "./routes/doctor/doctor.js";
+import indoorPatientRoutes from "./routes/indoorPatient/indoorPatient.js";
 
 import internalRoutes from "./routes/internal/internal.js";
 
@@ -106,6 +107,7 @@ fastify.register(transactionRoutes, { prefix: API });
 fastify.register(accountRoutes, { prefix: API });
 fastify.register(billingRoutes, { prefix: API });
 fastify.register(doctorRoutes , { prefix: API });
+fastify.register(indoorPatientRoutes , { prefix: API });
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
 fastify.get("/", async (req, reply) => reply.send("Lab API OK"));
