@@ -83,7 +83,7 @@ const addInvoiceSchema = {
     summary: "Create a new invoice",
     body: {
       type: "object",
-      required: ["patient", "tests", "amount"],
+      required: ["patient", "amount"],
       additionalProperties: false,
       properties: {
         patient: patientBodySchema,
@@ -99,8 +99,9 @@ const addInvoiceSchema = {
         },
         tests: {
           type: "array",
-          minItems: 1,
+          minItems: 0,
           maxItems: 50,
+          default: [],
           description: "List of tests included in the invoice",
           items: {
             type: "object",
@@ -233,6 +234,11 @@ async function invoiceRoutes(fastify) {
 
       if (amount.paid > amount.final) {
         return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
+      }
+
+      // ── At least one test or product required ───────────────────────────
+      if (!tests.length && !products.length) {
+        return reply.code(400).send({ error: "At least one test or product is required" });
       }
 
       // ── Billing guard ───────────────────────────────────────────────────
