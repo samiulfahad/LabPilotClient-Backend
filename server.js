@@ -15,7 +15,7 @@ import authRoutes from "./routes/auth/auth.js";
 import referrerRoutes from "./routes/referrer/referrer.js";
 import staffRoutes from "./routes/staff/staff.js";
 import testRoutes from "./routes/test/test.js";
-import productRoutes from "./routes/products/products.js";
+import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
