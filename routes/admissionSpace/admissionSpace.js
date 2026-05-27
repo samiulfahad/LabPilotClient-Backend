@@ -29,7 +29,7 @@
 
 import toObjectId from "../../utils/db.js";
 
-const COLLECTION = "spaces";
+const COLLECTION = "admissionSpaces";
 
 const DEPARTMENTS = [
   "general",
@@ -42,6 +42,7 @@ const DEPARTMENTS = [
   "oncology",
   "surgery",
   "urology",
+  "mio",
   "other",
 ];
 
