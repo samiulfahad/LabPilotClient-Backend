@@ -28,23 +28,9 @@
  */
 
 import toObjectId from "../../utils/db.js";
+import { ALLOWED_VALUES } from "../department/department.js";
 
 const COLLECTION = "admissionSpaces";
-
-const DEPARTMENTS = [
-  "general",
-  "cardiology",
-  "orthopedics",
-  "neurology",
-  "gynecology",
-  "pediatrics",
-  "icu",
-  "oncology",
-  "surgery",
-  "urology",
-  "mio",
-  "other",
-];
 
 // ─── Reusable Schema Fragments ────────────────────────────────────────────────
 
@@ -79,10 +65,10 @@ const multiBedConfSchema = {
   },
 };
 
-// departments is now an array with at least one valid enum value
+// departments driven by the canonical list from departmentRoutes
 const departmentsSchema = {
   type: "array",
-  items: { type: "string", enum: DEPARTMENTS },
+  items: { type: "string", enum: [...ALLOWED_VALUES] },
   minItems: 1,
   uniqueItems: true,
 };
@@ -104,8 +90,7 @@ const getAllSpacesSchema = {
     querystring: {
       type: "object",
       properties: {
-        // single dept filter value; "all" means no filter
-        department: { type: "string", enum: [...DEPARTMENTS, "all"] },
+        department: { type: "string", enum: [...ALLOWED_VALUES, "all"] },
       },
     },
   },
@@ -145,8 +130,6 @@ const updateSpaceSchema = {
 const deleteSpaceSchema = {
   schema: { tags: ["Spaces"], summary: "Hard-delete a space", params: spaceIdParamSchema },
 };
-
-// ── Reservation schemas ───────────────────────────────────────────────────────
 
 const reserveSingleSchema = {
   schema: {
@@ -215,7 +198,6 @@ async function admissionSpaceRoutes(fastify) {
     try {
       const filter = { labId: labId(req) };
       if (req.query.department && req.query.department !== "all") {
-        // match spaces whose departments array contains the requested value
         // also handles legacy docs that stored a singular `department` string
         filter.$or = [{ departments: req.query.department }, { department: req.query.department }];
       }
