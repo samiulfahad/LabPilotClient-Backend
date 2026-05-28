@@ -8,7 +8,7 @@
  *   labId        : ObjectId,
  *   name         : String,
  *   chargePerDay : Number,
- *   department   : String,
+ *   departments  : [String],       // array, min 1 item
  *   multiBed     : Boolean,
  *
  *   // single-bed reservation
@@ -79,10 +79,18 @@ const multiBedConfSchema = {
   },
 };
 
+// departments is now an array with at least one valid enum value
+const departmentsSchema = {
+  type: "array",
+  items: { type: "string", enum: DEPARTMENTS },
+  minItems: 1,
+  uniqueItems: true,
+};
+
 const spaceBodyProperties = {
   name: { type: "string", minLength: 1, maxLength: 100 },
   chargePerDay: { type: "number", minimum: 0 },
-  department: { type: "string", enum: DEPARTMENTS },
+  departments: departmentsSchema,
   multiBed: { type: "boolean" },
   multiBedConf: { oneOf: [multiBedConfSchema, { type: "null" }] },
 };
@@ -96,6 +104,7 @@ const getAllSpacesSchema = {
     querystring: {
       type: "object",
       properties: {
+        // single dept filter value; "all" means no filter
         department: { type: "string", enum: [...DEPARTMENTS, "all"] },
       },
     },
@@ -112,7 +121,7 @@ const createSpaceSchema = {
     summary: "Create a new space",
     body: {
       type: "object",
-      required: ["name", "chargePerDay", "department", "multiBed"],
+      required: ["name", "chargePerDay", "departments", "multiBed"],
       additionalProperties: false,
       properties: spaceBodyProperties,
     },
@@ -206,7 +215,9 @@ async function admissionSpaceRoutes(fastify) {
     try {
       const filter = { labId: labId(req) };
       if (req.query.department && req.query.department !== "all") {
-        filter.department = req.query.department;
+        // match spaces whose departments array contains the requested value
+        // also handles legacy docs that stored a singular `department` string
+        filter.$or = [{ departments: req.query.department }, { department: req.query.department }];
       }
       return col().find(filter).sort({ name: 1 }).toArray();
     } catch (err) {
@@ -232,7 +243,7 @@ async function admissionSpaceRoutes(fastify) {
   // ── POST /space/add ─────────────────────────────────────────────────────────
   fastify.post("/space/add", createSpaceSchema, async (req, reply) => {
     try {
-      const { name, chargePerDay, department, multiBed, multiBedConf } = req.body;
+      const { name, chargePerDay, departments, multiBed, multiBedConf } = req.body;
 
       if (multiBed && !multiBedConf) {
         return reply.code(400).send({ error: "multiBedConf is required when multiBed is true" });
@@ -254,7 +265,7 @@ async function admissionSpaceRoutes(fastify) {
         labId: labId(req),
         name: trimmedName,
         chargePerDay,
-        department,
+        departments,
         multiBed,
         ...(multiBed
           ? {
@@ -286,7 +297,7 @@ async function admissionSpaceRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid space ID" });
 
-      const { name, chargePerDay, department, multiBed, multiBedConf } = req.body;
+      const { name, chargePerDay, departments, multiBed, multiBedConf } = req.body;
 
       const resolvedMultiBedConf =
         multiBed === false
@@ -298,7 +309,7 @@ async function admissionSpaceRoutes(fastify) {
       const $set = {
         ...(name !== undefined && { name: name.trim() }),
         ...(chargePerDay !== undefined && { chargePerDay }),
-        ...(department !== undefined && { department }),
+        ...(departments !== undefined && { departments }),
         ...(multiBed !== undefined && { multiBed }),
         ...(resolvedMultiBedConf !== undefined && { multiBedConf: resolvedMultiBedConf }),
         ...(multiBed === false && { reserved: false, reservedNote: "" }),

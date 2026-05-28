@@ -1,4 +1,9 @@
+/**
+ * doctorRoutes.js
+ */
+
 import toObjectId from "../../utils/db.js";
+import { ALLOWED_VALUES, ALLOWED_DESIG_VALUES } from "../department/department.js";
 
 const collectionName = "doctors";
 const PAGE_SIZE = 20;
@@ -20,14 +25,17 @@ const doctorIdParamSchema = {
   },
 };
 
-// ─── Body Properties ──────────────────────────────────────────────────────────
-
 const doctorBodyProperties = {
   name: { type: "string", minLength: 1, maxLength: 120 },
   degree: { type: "string", maxLength: 200 },
   contactNumber: { type: "string", minLength: 1, maxLength: 20 },
   designation: { type: "string", maxLength: 100 },
-  department: { type: "string", minLength: 1, maxLength: 100 },
+  departments: {
+    type: "array",
+    minItems: 1,
+    uniqueItems: true,
+    items: { type: "string", minLength: 1, maxLength: 100 },
+  },
   commissionType: { type: "string", enum: ["percentage", "fixed"] },
   commissionValue: { type: "number", minimum: 0 },
 };
@@ -59,7 +67,7 @@ const createDoctorSchema = {
     summary: "Register a new doctor",
     body: {
       type: "object",
-      required: ["name", "contactNumber", "department", "commissionType", "commissionValue"],
+      required: ["name", "contactNumber", "departments", "commissionType", "commissionValue"],
       additionalProperties: false,
       properties: doctorBodyProperties,
     },
@@ -85,6 +93,11 @@ const deleteDoctorSchema = {
   schema: { tags: ["Doctors"], summary: "Hard delete a doctor", params: doctorIdParamSchema },
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const validateDepartments = (departments) => departments.filter((d) => !ALLOWED_VALUES.has(d));
+const validateDesignation = (designation) => designation && !ALLOWED_DESIG_VALUES.has(designation);
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function doctorRoutes(fastify) {
@@ -108,12 +121,12 @@ async function doctorRoutes(fastify) {
           { degree: regex },
           { contactNumber: regex },
           { designation: regex },
-          { department: regex },
+          { departments: regex },
         ];
       }
 
       if (department?.trim()) {
-        query.department = department.trim();
+        query.departments = department.trim();
       }
 
       const [doctors, total] = await Promise.all([
@@ -152,11 +165,16 @@ async function doctorRoutes(fastify) {
   // ── POST /doctor/add ───────────────────────────────────────────────────────
   fastify.post("/doctor/add", createDoctorSchema, async (req, reply) => {
     try {
-      const { name, degree, contactNumber, designation, department, commissionType, commissionValue } = req.body;
+      const { name, degree, contactNumber, designation, departments, commissionType, commissionValue } = req.body;
 
-      if (commissionType === "percentage" && commissionValue > 100) {
+      if (commissionType === "percentage" && commissionValue > 100)
         return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
-      }
+
+      const invalidDepts = validateDepartments(departments);
+      if (invalidDepts.length > 0)
+        return reply.code(400).send({ error: "Invalid department values", invalid: invalidDepts });
+
+      if (validateDesignation(designation)) return reply.code(400).send({ error: "Invalid designation value" });
 
       const result = await collection.insertOne({
         labId: labId(req),
@@ -164,7 +182,7 @@ async function doctorRoutes(fastify) {
         degree: degree ?? "",
         contactNumber,
         designation: designation ?? "",
-        department,
+        departments,
         commissionType,
         commissionValue,
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
@@ -183,17 +201,24 @@ async function doctorRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid doctor ID" });
 
-      const { name, degree, contactNumber, designation, department, commissionType, commissionValue } = req.body;
+      const { name, degree, contactNumber, designation, departments, commissionType, commissionValue } = req.body;
 
-      // Fetch current type only if needed for cross-field validation
+      if (departments !== undefined) {
+        const invalidDepts = validateDepartments(departments);
+        if (invalidDepts.length > 0)
+          return reply.code(400).send({ error: "Invalid department values", invalid: invalidDepts });
+      }
+
+      if (validateDesignation(designation)) return reply.code(400).send({ error: "Invalid designation value" });
+
+      if (commissionType === "percentage" && commissionValue !== undefined && commissionValue > 100)
+        return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
+
+      // If only commissionValue is patched, check stored type
       if (commissionValue !== undefined && commissionType === undefined) {
         const existing = await collection.findOne({ _id, labId: labId(req) }, { projection: { commissionType: 1 } });
-        if (existing?.commissionType === "percentage" && commissionValue > 100) {
+        if (existing?.commissionType === "percentage" && commissionValue > 100)
           return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
-        }
-      }
-      if (commissionType === "percentage" && commissionValue !== undefined && commissionValue > 100) {
-        return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
       }
 
       const updateData = {
@@ -201,7 +226,7 @@ async function doctorRoutes(fastify) {
         ...(degree !== undefined && { degree }),
         ...(contactNumber !== undefined && { contactNumber }),
         ...(designation !== undefined && { designation }),
-        ...(department !== undefined && { department }),
+        ...(departments !== undefined && { departments }),
         ...(commissionType !== undefined && { commissionType }),
         ...(commissionValue !== undefined && { commissionValue }),
         updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
