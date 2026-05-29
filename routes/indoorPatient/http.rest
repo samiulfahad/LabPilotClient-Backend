@@ -1,0 +1,216 @@
+### ==============================================================================
+### INDOOR PATIENT (IPD) MANAGEMENT SYSTEM INTEGRATION TESTING
+### ==============================================================================
+
+@baseUrl = http://localhost:3000/v1
+@authToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5Yzk1YjhhM2EwMTMzNzljOTUxMDFiYyIsIm5hbWUiOiJTYW1pdWwgRmFoYWQiLCJyb2xlIjoiYWRtaW4iLCJwZXJtaXNzaW9ucyI6eyJjcmVhdGVJbnZvaWNlIjp0cnVlLCJlZGl0SW52b2ljZSI6dHJ1ZSwiZGVsZXRlSW52b2ljZSI6dHJ1ZSwiY2FzaG1lbW8iOnRydWUsInVwbG9hZFJlcG9ydCI6ZmFsc2UsImRvd25sb2FkUmVwb3J0IjpmYWxzZX0sImxhYktleSI6MTExMTEsImxhYklkIjoiNjljNTY0MzlhYmI3NzUzNTQ5ZjEwN2E0IiwiaWF0IjoxNzc5OTkzNDg3LCJleHAiOjE3Nzk5OTM1NDd9.8uY_KstMGsPEOK5hX2co6F-d9g0NOdQY1Rpr6meIyH8
+
+# Seed Configuration Mappings (Replace with valid 24-char hex strings from your DB)
+@sampleSpaceId = 661bca11f234567890abcdef
+@sampleDoctorId = 661bca22f234567890abcdef
+@sampleReferrerId = 661bca33f234567890abcdef
+
+# Dynamic runtime tracking variable (Populated automatically after running step 2)
+@createdPatientId = {{admitPatient.response.body._id}}
+
+
+### ── 1. GET REQUIRED SEED DATA FOR FORM LOADING ──────────────────────────────
+# Retrieves spaces, doctors, and active referrers configured under the active labId
+GET {{baseUrl}}/indoor-patients/required-data
+Authorization: Bearer {{authToken}}
+Accept: application/json
+
+###
+
+
+### ── 2. ADMIT NEW INDOOR PATIENT (POST) ──────────────────────────────────────
+# @name admitPatient
+POST {{baseUrl}}/indoor-patient/admit
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Kazi Rakibul Hasan",
+  "age": 42,
+  "gender": "male",
+  "bloodGroup": "O+",
+  "contactNumber": "01712345678",
+  "address": "House 45, Road 12, Dhanmondi, Dhaka",
+  "guardian": {
+    "name": "Sultana Razia",
+    "relation": "Wife",
+    "contactNumber": "01987654321"
+  },
+  "chiefComplaint": "Severe acute lower abdominal pain with suspected appendicitis.",
+  "medicalHistory": "Hypertensive since 2021, controlled with Amlodipine 5mg.",
+  "currentSpace": {
+    "spaceId": "{{sampleSpaceId}}",
+    "bedNumber": 104
+  },
+  "supervisorDoctor": {
+    "doctorId": "{{sampleDoctorId}}",
+    "name": "Prof. Dr. M. A. Rahman"
+  },
+  "referrer": {
+    "id": "{{sampleReferrerId}}",
+    "name": "Dr. Asif Iqbal",
+    "type": "referrer_collection"
+  },
+  "dealType": "regular"
+}
+
+###
+
+
+### ── 3. LIST INDOOR PATIENTS WITH FILTERS (GET) ─────────────────────────────
+# Supports query parameters: status ('admitted'|'discharged'|'all'), search, page, limit
+GET {{baseUrl}}/indoor-patients?status=admitted&limit=15&page=1
+Authorization: Bearer {{authToken}}
+Accept: application/json
+
+###
+
+
+### ── 4. CAPTURE COMPLETE SINGLE PATIENT LEDGER (GET) ─────────────────────────
+GET {{baseUrl}}/indoor-patient/{{createdPatientId}}
+Authorization: Bearer {{authToken}}
+Accept: application/json
+
+###
+
+
+### ── 5. UPDATE PATIENT CORE INFORMATION (PATCH) ─────────────────────────────
+PATCH {{baseUrl}}/indoor-patient/{{createdPatientId}}/update-info
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Kazi Rakibul Hasan (Updated)",
+  "age": 43,
+  "bloodGroup": "O+",
+  "guardian": {
+    "name": "Sultana Razia",
+    "relation": "Wife",
+    "contactNumber": "01987654322"
+  },
+  "chiefComplaint": "Acute appendicitis with localized peritonitis baseline."
+}
+
+###
+
+
+### ── 6. EXECUTE STRUCTURAL SPACE / WARD TRANSFER (PATCH) ────────────────────
+@targetNewSpaceId = 661bca44f234567890abcdef
+
+PATCH {{baseUrl}}/indoor-patient/{{createdPatientId}}/transfer
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "spaceId": "{{targetNewSpaceId}}",
+  "bedNumber": 202,
+  "reason": "Post-operative critical monitoring migration to Cabin block."
+}
+
+###
+
+
+### ── 7. SHIFT RE-ASSIGN SUPERVISOR DOCTOR WITH HISTORY (PATCH) ──────────────
+@newDoctorId = 661bca55f234567890abcdef
+
+PATCH {{baseUrl}}/indoor-patient/{{createdPatientId}}/change-doctor
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "doctorId": "{{newDoctorId}}",
+  "name": "Dr. Shahana Chowdhury",
+  "reason": "Surgical monitoring handed over to on-call chief general surgeon."
+}
+
+###
+
+
+### ── 8. ADD OPERATIONAL CHARGE LINE ITEM ENTRY (POST) ────────────────────────
+# @name postExpense
+POST {{baseUrl}}/indoor-patient/{{createdPatientId}}/expense
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "type": "test",
+  "name": "Ultrasonography of Whole Abdomen (Emergency)",
+  "price": 3500,
+  "quantity": 1
+}
+
+###
+
+
+### ── 9. VOID / REVERSE EXPENSE LINE ITEM ENTRY (DELETE) ──────────────────────
+@expenseItemId = {{postExpense.response.body.expense._eid}}
+
+DELETE {{baseUrl}}/indoor-patient/{{createdPatientId}}/expense/{{expenseItemId}}
+Authorization: Bearer {{authToken}}
+
+###
+
+
+### ── 10. TRANSACTION COLLECT PAYMENT RECEIPT (POST) ──────────────────────────
+POST {{baseUrl}}/indoor-patient/{{createdPatientId}}/payment
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "amount": 25000,
+  "method": "bkash",
+  "note": "Initial advance operational booking deposit receipt."
+}
+
+###
+
+
+### ── 11. ADMIT AN ALTERNATIVE FIXED CONTRACT / PACKAGE DEAL (POST) ──────────
+# Demonstrates operational schema logic variant mapping operation package total flat to 50k BDT
+POST {{baseUrl}}/indoor-patient/admit
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Sujit Kumar Das",
+  "age": 29,
+  "gender": "male",
+  "contactNumber": "01811223344",
+  "currentSpace": {
+    "spaceId": "{{sampleSpaceId}}",
+    "bedNumber": null
+  },
+  "supervisorDoctor": {
+    "doctorId": "{{sampleDoctorId}}",
+    "name": "Prof. Dr. M. A. Rahman"
+  },
+  "dealType": "fixed",
+  "fixedDeal": {
+    "amount": 50000,
+    "note": "Comprehensive flat operational fee including 3 days standard package bed charges."
+  }
+}
+
+###
+
+
+### ── 12. RUN LIVE INFRASTRUCTURE LOCATION DISCHARGE FILE (PATCH) ─────────────
+PATCH {{baseUrl}}/indoor-patient/{{createdPatientId}}/discharge
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "note": "Discharge parameters stable. Medications and post-op care directives handed over to family."
+}
+
+###
+
+
+### ── 13. DATA RETENTION ENTRIES SOFT-DELETE PROFILE (DELETE) ─────────────────
+DELETE {{baseUrl}}/indoor-patient/{{createdPatientId}}
+Authorization: Bearer {{authToken}}
