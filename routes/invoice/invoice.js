@@ -214,7 +214,7 @@ async function invoiceRoutes(fastify) {
             .toArray(),
           fastify.mongo.db
             .collection("products")
-            .find({ labId: labId(req) }, { projection: { name: 1, price: 1, hasStock: 1, stock: 1 } })
+            .find({ labId: labId(req) }, { projection: { name: 1, type:1, price: 1, hasStock: 1, stock: 1 } })
             .sort({ name: 1 })
             .toArray(),
         ]);

@@ -261,7 +261,7 @@ const addExpenseSchema = {
       required: ["type", "name", "price", "quantity"],
       additionalProperties: false,
       properties: {
-        type: { type: "string", enum: ["medicine", "test", "service", "other"] },
+        type: { type: "string", enum: ["medicine", "product", "test", "service", "other"] },
         itemId: nullableObjectIdSchema,
         name: { type: "string", minLength: 1, maxLength: 200 },
         price: { type: "number", minimum: 0 },
