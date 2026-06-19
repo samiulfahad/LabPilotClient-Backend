@@ -53,9 +53,9 @@
  *
  *   waivers: [{
  *     type      : "bed-charge" | "bed-charge-bulk",
- *     refDate   : String | null,     // single-day waiver
- *     refDates  : [String] | null,   // bulk waiver
- *     amount    : Number,            // total waiver amount
+ *     refDate   : String | null,
+ *     refDates  : [String] | null,
+ *     amount    : Number,
  *     note      : String,
  *     appliedAt : Number,
  *     appliedBy : { id, name },
@@ -128,6 +128,24 @@ const bedChargeWaiverSchema = {
   properties: {
     amount: { type: "number", minimum: 0 },
     note: { type: "string", maxLength: 300 },
+  },
+};
+
+const bedChargeAdjustmentSchema = {
+  schema: {
+    tags: ["IndoorPatients"],
+    summary: "Add an increase or decrease adjustment to the accrued bed charge total",
+    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
+    body: {
+      type: "object",
+      required: ["direction", "amount"],
+      additionalProperties: false,
+      properties: {
+        direction: { type: "string", enum: ["increase", "decrease"] },
+        amount: { type: "number", minimum: 0.01 },
+        note: { type: "string", maxLength: 300 },
+      },
+    },
   },
 };
 
@@ -259,45 +277,6 @@ const addExpenseSchema = {
   },
 };
 
-const addBedChargeSchema = {
-  schema: {
-    tags: ["IndoorPatients"],
-    summary: "Add a per-day bed charge for a specific BST calendar date. Rejects duplicates and future dates.",
-    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
-    body: {
-      type: "object",
-      required: ["date"],
-      additionalProperties: false,
-      properties: {
-        date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
-        waiver: bedChargeWaiverSchema,
-      },
-    },
-  },
-};
-
-const addBedChargesBulkSchema = {
-  schema: {
-    tags: ["IndoorPatients"],
-    summary: "Add multiple bed charges in one atomic operation. Skips duplicates and invalid dates silently.",
-    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
-    body: {
-      type: "object",
-      required: ["dates"],
-      additionalProperties: false,
-      properties: {
-        dates: {
-          type: "array",
-          minItems: 1,
-          maxItems: 90,
-          items: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
-        },
-        waiver: bedChargeWaiverSchema,
-      },
-    },
-  },
-};
-
 const addPaymentSchema = {
   schema: {
     tags: ["IndoorPatients"],
@@ -348,17 +327,11 @@ const generateAdmissionId = async (col, labId) => {
     .sort({ admissionId: -1 })
     .limit(1)
     .toArray();
-  let seq = 1;
-  if (lastDoc.length > 0) {
-    const lastSeq = parseInt(lastDoc[0].admissionId.split("-").pop(), 10);
-    seq = lastSeq + 1;
-  }
+  const seq = lastDoc.length > 0 ? parseInt(lastDoc[0].admissionId.split("-").pop(), 10) + 1 : 1;
   return `${prefix}${String(seq).padStart(4, "0")}`;
 };
 
-/**
- * Resolve which space (and chargePerDay) a patient was in on a given BST date string.
- */
+// Resolve which space (and chargePerDay) a patient was in on a given BST date string.
 const resolveSpaceForDate = (admission, targetDate) => {
   const admissionDate = tsBstDate(admission.admittedAt);
   const releaseDate = admission.releasedAt ? tsBstDate(admission.releasedAt) : null;
@@ -750,12 +723,13 @@ async function indoorPatientRoutes(fastify) {
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
       if (!doctor) return reply.code(404).send({ error: "Doctor not found" });
 
+      const changedAt = now();
       await col().updateOne(
         { _id, labId: labId(req) },
         {
           $set: {
             supervisorDoctor: { doctorId: toObjectId(doctorId), name: doctor.name, degree: doctor.degree ?? "" },
-            updated: { at: now(), by: by(req) },
+            updated: { at: changedAt, by: by(req) },
           },
           $push: {
             doctorHistory: {
@@ -763,7 +737,7 @@ async function indoorPatientRoutes(fastify) {
               previousDoctorName: admission.supervisorDoctor.name,
               newDoctorId: toObjectId(doctorId),
               newDoctorName: doctor.name,
-              changedAt: now(),
+              changedAt,
               changedBy: by(req),
               note: note ?? "",
             },
@@ -785,6 +759,7 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { type, itemId, name, price, quantity, note } = req.body;
 
+      const addedAt = now();
       const result = await col().updateOne(
         { _id, labId: labId(req) },
         {
@@ -797,11 +772,11 @@ async function indoorPatientRoutes(fastify) {
               quantity,
               total: price * quantity,
               note: note ?? "",
-              addedAt: now(),
+              addedAt,
               addedBy: by(req),
             },
           },
-          $set: { updated: { at: now(), by: by(req) } },
+          $set: { updated: { at: addedAt, by: by(req) } },
         },
       );
 
@@ -813,156 +788,36 @@ async function indoorPatientRoutes(fastify) {
     }
   });
 
-  // ── POST /indoor-patient/:id/bed-charge ──────────────────────────────────────
-  fastify.post("/indoor-patient/:id/bed-charge", addBedChargeSchema, async (req, reply) => {
+  fastify.post("/indoor-patient/:id/bed-charge-adjustment", bedChargeAdjustmentSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
 
-      const { date, waiver } = req.body;
+      const { direction, amount, note } = req.body;
+      const signedAmount = direction === "decrease" ? -amount : amount;
+      const appliedAt = now();
 
-      const admission = await col().findOne({ _id, labId: labId(req) });
-      if (!admission) return reply.code(404).send({ error: "Patient not found" });
-
-      const todayBst = tsBstDate(now());
-      if (date > todayBst) return reply.code(400).send({ error: "Cannot add bed charge for a future date" });
-
-      const alreadyExists = (admission.bedCharges ?? []).some((c) => c.date === date);
-      if (alreadyExists) return reply.code(409).send({ error: `Bed charge for ${date} already exists` });
-
-      const spaceInfo = resolveSpaceForDate(admission, date);
-      if (!spaceInfo) return reply.code(400).send({ error: `Date ${date} is outside this patient's admission period` });
-
-      const waiverAmount = waiver?.amount ?? 0;
-      const chargeEntry = {
-        date,
-        spaceName: spaceInfo.spaceName,
-        bedNumber: spaceInfo.bedNumber,
-        amount: spaceInfo.amount,
-        waiver: waiverAmount > 0 ? { amount: waiverAmount, note: waiver?.note ?? "" } : null,
-        net: spaceInfo.amount - waiverAmount,
-        addedAt: now(),
-        addedBy: by(req),
-      };
-
-      const updateOp = {
-        $push: { bedCharges: chargeEntry },
-        $set: { updated: { at: now(), by: by(req) } },
-      };
-
-      if (waiverAmount > 0) {
-        updateOp.$push.waivers = {
-          type: "bed-charge",
-          refDate: date,
-          refDates: null,
-          amount: waiverAmount,
-          note: waiver?.note ?? "",
-          appliedAt: now(),
-          appliedBy: by(req),
-        };
-      }
-
-      const result = await col().updateOne({ _id, labId: labId(req) }, updateOp);
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
-
-      return reply.code(201).send({
-        success: true,
-        date,
-        amount: spaceInfo.amount,
-        waiver: waiverAmount,
-        net: spaceInfo.amount - waiverAmount,
-        spaceName: spaceInfo.spaceName,
-      });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to add bed charge" });
-    }
-  });
-
-  // ── POST /indoor-patient/:id/bed-charges-bulk ────────────────────────────────
-  fastify.post("/indoor-patient/:id/bed-charges-bulk", addBedChargesBulkSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-
-      const { dates, waiver } = req.body;
-      const uniqueDates = [...new Set(dates)].sort();
-
-      const admission = await col().findOne({ _id, labId: labId(req) });
-      if (!admission) return reply.code(404).send({ error: "Patient not found" });
-      if (admission.status !== "admitted") return reply.code(400).send({ error: "Patient is not currently admitted" });
-
-      const todayBst = tsBstDate(now());
-      const existingDates = new Set((admission.bedCharges ?? []).map((c) => c.date));
-      const waiverAmount = waiver?.amount ?? 0;
-
-      const newEntries = [];
-      const skipped = [];
-
-      for (const date of uniqueDates) {
-        if (date > todayBst) {
-          skipped.push({ date, reason: "future date" });
-          continue;
-        }
-        if (existingDates.has(date)) {
-          skipped.push({ date, reason: "already exists" });
-          continue;
-        }
-        const spaceInfo = resolveSpaceForDate(admission, date);
-        if (!spaceInfo) {
-          skipped.push({ date, reason: "outside admission period" });
-          continue;
-        }
-        newEntries.push({
-          date,
-          spaceName: spaceInfo.spaceName,
-          bedNumber: spaceInfo.bedNumber,
-          amount: spaceInfo.amount,
-          waiver: waiverAmount > 0 ? { amount: waiverAmount, note: waiver?.note ?? "" } : null,
-          net: spaceInfo.amount - waiverAmount,
-          addedAt: now(),
-          addedBy: by(req),
-        });
-      }
-
-      if (newEntries.length === 0)
-        return reply.code(409).send({ error: "All dates already billed or invalid", skipped });
-
-      const updateOp = {
-        $push: { bedCharges: { $each: newEntries } },
-        $set: { updated: { at: now(), by: by(req) } },
-      };
-
-      const totalWaiver = waiverAmount * newEntries.length;
-      if (totalWaiver > 0) {
-        updateOp.$push.waivers = {
-          $each: [
-            {
-              type: "bed-charge-bulk",
-              refDate: null,
-              refDates: newEntries.map((e) => e.date),
-              amount: totalWaiver,
-              note: waiver?.note ?? "",
-              appliedAt: now(),
+      const result = await col().updateOne(
+        { _id, labId: labId(req) },
+        {
+          $push: {
+            bedChargeAdjustments: {
+              direction,
+              amount: signedAmount,
+              note: note ?? "",
+              appliedAt,
               appliedBy: by(req),
             },
-          ],
-        };
-      }
+          },
+          $set: { updated: { at: appliedAt, by: by(req) } },
+        },
+      );
 
-      await col().updateOne({ _id, labId: labId(req) }, updateOp);
-
-      return reply.code(201).send({
-        success: true,
-        added: newEntries.length,
-        skipped,
-        totalCharge: newEntries.reduce((s, e) => s + e.amount, 0),
-        totalWaiver,
-        totalNet: newEntries.reduce((s, e) => s + e.net, 0),
-      });
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+      return reply.code(201).send({ success: true });
     } catch (err) {
       req.log.error(err);
-      return reply.code(500).send({ error: "Failed to add bed charges" });
+      return reply.code(500).send({ error: "Failed to save bed charge adjustment" });
     }
   });
 
@@ -973,13 +828,12 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { amount, note } = req.body;
 
+      const collectedAt = now();
       const result = await col().updateOne(
         { _id, labId: labId(req) },
         {
-          $push: {
-            payments: { amount, collectedBy: by(req), collectedAt: now(), note: note ?? "" },
-          },
-          $set: { updated: { at: now(), by: by(req) } },
+          $push: { payments: { amount, collectedBy: by(req), collectedAt, note: note ?? "" } },
+          $set: { updated: { at: collectedAt, by: by(req) } },
         },
       );
 
