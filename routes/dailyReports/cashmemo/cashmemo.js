@@ -1,4 +1,4 @@
-import toObjectId from "../../utils/db.js";
+import toObjectId from "../../../utils/db.js";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -58,9 +58,6 @@ async function cashmemoRoutes(fastify) {
                       totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
                       totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                       totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
-                      deliveredCount: {
-                        $sum: { $cond: [{ $eq: ["$delivery.status", true] }, 1, 0] },
-                      },
                       fullyPaidCount: {
                         $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
                       },
@@ -78,12 +75,21 @@ async function cashmemoRoutes(fastify) {
                       totalNet: 1,
                       totalPaid: 1,
                       totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
-                      deliveredCount: 1,
                       fullyPaidCount: 1,
                     },
                   },
                 ],
-                deleted: [{ $match: { "deletion.status": true } }, { $count: "deletedCount" }],
+                deleted: [
+                  { $match: { "deletion.status": true } },
+                  {
+                    $group: {
+                      _id: null,
+                      deletedCount: { $sum: 1 },
+                      totalAmountDeleted: { $sum: { $ifNull: ["$amount.initial", 0] } },
+                    },
+                  },
+                  { $project: { _id: 0, deletedCount: 1, totalAmountDeleted: 1 } },
+                ],
               },
             },
           ],
@@ -101,13 +107,13 @@ async function cashmemoRoutes(fastify) {
         totalNet: 0,
         totalPaid: 0,
         totalDue: 0,
-        deliveredCount: 0,
         fullyPaidCount: 0,
       };
 
       return reply.send({
         ...active,
         deletedCount: result.deleted[0]?.deletedCount ?? 0,
+        totalAmountDeleted: result.deleted[0]?.totalAmountDeleted ?? 0,
       });
     } catch (err) {
       req.log.error(err);

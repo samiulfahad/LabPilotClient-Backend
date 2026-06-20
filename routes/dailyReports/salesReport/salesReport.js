@@ -1,9 +1,9 @@
 // routes/testStats.js
-import toObjectId from "../../utils/db.js";
+import toObjectId from "../../../utils/db.js";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
-const testStatsQuerySchema = {
+const salesReportQuerySchema = {
   schema: {
     tags: ["Test Stats"],
     summary: "Get test and product order counts for a date range",
@@ -27,7 +27,7 @@ const testStatsQuerySchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function saleStatsRoutes(fastify) {
+async function salesReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -35,7 +35,7 @@ async function saleStatsRoutes(fastify) {
   fastify.addHook("onRequest", fastify.authorize("cashmemo"));
 
   // ── GET /test-stats/summary ─────────────────────────────────────────────────
-  fastify.get("/test-stats/summary", testStatsQuerySchema, async (req, reply) => {
+  fastify.get("/test-stats/summary", salesReportQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
       const endDate = parseInt(req.query.endDate);
@@ -99,4 +99,4 @@ async function saleStatsRoutes(fastify) {
   });
 }
 
-export default saleStatsRoutes;
+export default salesReportRoutes;

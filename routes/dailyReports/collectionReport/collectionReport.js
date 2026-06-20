@@ -1,8 +1,8 @@
-import toObjectId from "../../utils/db.js";
+import toObjectId from "../../../utils/db.js";
 
 const summaryQuerySchema = {
   schema: {
-    tags: ["Transactions"],
+    tags: ["Collection Report"],
     summary: "Get invoice & collection summary grouped by staff for a date range",
     querystring: {
       type: "object",
@@ -15,13 +15,13 @@ const summaryQuerySchema = {
   },
 };
 
-async function transactionRoutes(fastify) {
+async function collectionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  fastify.get("/transactions/summary", summaryQuerySchema, async (req, reply) => {
+  fastify.get("/collection-report/summary", summaryQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);
     const endDate = parseInt(req.query.endDate);
 
@@ -42,14 +42,13 @@ async function transactionRoutes(fastify) {
             ...(isStaff && { "createdBy.id": userId }),
           },
         },
-        { $sort: { createdAt: 1 } },
+        { $sort: { createdAt: 1 } }, // keeps invoices chronological within each staff's pushed array
         {
           $group: {
             _id: "$createdBy.id",
             latestName: { $last: "$createdBy.name" },
             totalInvoices: { $sum: 1 },
             totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
-            totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
             totalDue: {
               $sum: {
                 $subtract: [{ $ifNull: ["$amount.final", 0] }, { $ifNull: ["$amount.paid", 0] }],
@@ -74,7 +73,6 @@ async function transactionRoutes(fastify) {
             invoices: { $slice: ["$invoices", 200] },
           },
         },
-        { $sort: { totalFinal: -1 } },
       ];
 
       // ── Pipeline B: Collection stats per collector ───────────────────────
@@ -99,7 +97,6 @@ async function transactionRoutes(fastify) {
             _id: "$collections.by.id",
             collectorName: { $last: "$collections.by.name" },
             totalCollected: { $sum: "$collections.amount" },
-            collectionCount: { $sum: 1 },
             collections: {
               $push: {
                 invoiceId: "$invoiceId",
@@ -115,7 +112,6 @@ async function transactionRoutes(fastify) {
             collections: { $slice: ["$collections", 200] },
           },
         },
-        { $sort: { totalCollected: -1 } },
       ];
 
       const [invoiceRows, collectionRows] = await Promise.all([
@@ -126,7 +122,7 @@ async function transactionRoutes(fastify) {
       // ── Merge by staffId ────────────────────────────────────────────────
       const collectionMap = new Map(collectionRows.map((r) => [String(r._id), r]));
 
-      const staff = invoiceRows.map((row) => {
+      const merged = invoiceRows.map((row) => {
         const staffId = String(row._id);
         const collectorData = collectionMap.get(staffId) ?? {};
         collectionMap.delete(staffId);
@@ -135,49 +131,48 @@ async function transactionRoutes(fastify) {
           name: collectorData.collectorName ?? row.latestName ?? "Unknown",
           totalInvoices: row.totalInvoices,
           totalFinal: row.totalFinal,
-          totalPaid: row.totalPaid,
           totalDue: row.totalDue,
           invoices: row.invoices,
           totalCollected: collectorData.totalCollected ?? 0,
-          collectionCount: collectorData.collectionCount ?? 0,
           collections: collectorData.collections ?? [],
         };
       });
 
       // Collectors who collected but created no invoices in this window
       for (const [, row] of collectionMap) {
-        staff.push({
+        merged.push({
           staffId: String(row._id),
           name: row.collectorName ?? "Unknown",
           totalInvoices: 0,
           totalFinal: 0,
-          totalPaid: 0,
           totalDue: 0,
           invoices: [],
           totalCollected: row.totalCollected,
-          collectionCount: row.collectionCount,
           collections: row.collections,
         });
       }
 
       // ── Grand totals ────────────────────────────────────────────────────
-      const totals = staff.reduce(
+      const totals = merged.reduce(
         (acc, s) => ({
           totalInvoices: acc.totalInvoices + s.totalInvoices,
           totalFinal: acc.totalFinal + s.totalFinal,
-          totalPaid: acc.totalPaid + s.totalPaid,
           totalDue: acc.totalDue + s.totalDue,
           totalCollected: acc.totalCollected + s.totalCollected,
         }),
-        { totalInvoices: 0, totalFinal: 0, totalPaid: 0, totalDue: 0, totalCollected: 0 },
+        { totalInvoices: 0, totalFinal: 0, totalDue: 0, totalCollected: 0 },
       );
+
+      // totalFinal/totalDue per staff were only needed to compute the grand
+      // totals above — strip them before sending since the UI doesn't use them
+      const staff = merged.map(({ totalFinal, totalDue, ...rest }) => rest);
 
       return reply.send({ staff, totals });
     } catch (err) {
       req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch transaction summary" });
+      return reply.code(500).send({ error: "Failed to fetch collection report" });
     }
   });
 }
 
-export default transactionRoutes;
+export default collectionReportRoutes;

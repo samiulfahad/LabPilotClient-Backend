@@ -1,9 +1,9 @@
-import toObjectId from "../../utils/db.js";
+import toObjectId from "../../../utils/db.js";
 
 const summaryQuerySchema = {
   schema: {
-    tags: ["Commission"],
-    summary: "Get commission summary for a date range",
+    tags: ["Commission Report"],
+    summary: "Get commission report for a date range",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
@@ -15,14 +15,14 @@ const summaryQuerySchema = {
   },
 };
 
-async function commissionRoutes(fastify) {
+async function commissionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
 
   // ── GET /commission/summary ───────────────────────────────────────────────
-  fastify.get("/commission/summary", summaryQuerySchema, async (req, reply) => {
+  fastify.get("/commission-report/summary", summaryQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);
     const endDate = parseInt(req.query.endDate);
 
@@ -124,4 +124,4 @@ async function commissionRoutes(fastify) {
   });
 }
 
-export default commissionRoutes;
+export default commissionReportRoutes;

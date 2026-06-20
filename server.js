@@ -18,10 +18,13 @@ import testRoutes from "./routes/test/test.js";
 import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
-import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
-import saleStatsRoutes from "./routes/saleStats/saleStats.js";
-import commissionRoutes from "./routes/commission/commission.js";
-import transactionRoutes from "./routes/transaction/transaction.js";
+
+// Daily Reports
+import cashmemoRoutes from "./routes/dailyReports/cashmemo/cashmemo.js";
+import salesReportRoutes from "./routes/dailyReports/salesReport/salesReport.js";
+import commissionReportRoutes from "./routes/dailyReports/commissionReport/commissionReport.js";
+import collectionReportRoutes from "./routes/dailyReports/collectionReport/collectionReport.js";
+
 import accountRoutes from "./routes/account/account.js";
 import billingRoutes from "./routes/billing/billing.js";
 import doctorRoutes from "./routes/doctor/doctor.js";
@@ -97,17 +100,24 @@ await fastify.register(swaggerUi, {
 // ── 7. Routes
 const API = "/v1";
 
+// Auth
 fastify.register(authRoutes, { prefix: API });
+
+// Daily Reports
 fastify.register(cashmemoRoutes, { prefix: API });
-fastify.register(saleStatsRoutes, { prefix: API });
-fastify.register(commissionRoutes, { prefix: API });
+fastify.register(salesReportRoutes, { prefix: API });
+fastify.register(commissionReportRoutes, { prefix: API });
+fastify.register(collectionReportRoutes, { prefix: API });
+
+// Referrers
 fastify.register(referrerRoutes, { prefix: API });
+
+// Staffs
 fastify.register(staffRoutes, { prefix: API });
 fastify.register(testRoutes, { prefix: API });
 fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(reportRoutes, { prefix: API });
-fastify.register(transactionRoutes, { prefix: API });
 fastify.register(accountRoutes, { prefix: API });
 fastify.register(billingRoutes, { prefix: API });
 fastify.register(doctorRoutes , { prefix: API });
