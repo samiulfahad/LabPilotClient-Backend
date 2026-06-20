@@ -27,7 +27,7 @@ const testStatsQuerySchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function testStatRoutes(fastify) {
+async function saleStatsRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -99,4 +99,4 @@ async function testStatRoutes(fastify) {
   });
 }
 
-export default testStatRoutes;
+export default saleStatsRoutes;

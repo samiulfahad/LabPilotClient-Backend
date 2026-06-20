@@ -19,7 +19,7 @@ import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import reportRoutes from "./routes/report/report.js";
 import cashmemoRoutes from "./routes/cashmemo/cashmemo.js";
-import testStatRoutes from "./routes/testStat/testStat.js";
+import saleStatsRoutes from "./routes/saleStats/saleStats.js";
 import commissionRoutes from "./routes/commission/commission.js";
 import transactionRoutes from "./routes/transaction/transaction.js";
 import accountRoutes from "./routes/account/account.js";
@@ -99,7 +99,7 @@ const API = "/v1";
 
 fastify.register(authRoutes, { prefix: API });
 fastify.register(cashmemoRoutes, { prefix: API });
-fastify.register(testStatRoutes, { prefix: API });
+fastify.register(saleStatsRoutes, { prefix: API });
 fastify.register(commissionRoutes, { prefix: API });
 fastify.register(referrerRoutes, { prefix: API });
 fastify.register(staffRoutes, { prefix: API });
