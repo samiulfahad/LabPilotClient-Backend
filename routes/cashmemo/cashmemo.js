@@ -84,28 +84,6 @@ async function cashmemoRoutes(fastify) {
                   },
                 ],
                 deleted: [{ $match: { "deletion.status": true } }, { $count: "deletedCount" }],
-                testCounts: [
-                  { $match: { "deletion.status": false } },
-                  { $unwind: "$tests" },
-                  { $group: { _id: "$tests.name", count: { $sum: 1 } } },
-                  { $sort: { count: -1 } },
-                  { $limit: 20 },
-                  { $project: { _id: 0, name: "$_id", count: 1 } },
-                ],
-                // ── Product counts: sum quantities, not just occurrences ──────
-                productCounts: [
-                  { $match: { "deletion.status": false } },
-                  { $unwind: "$products" },
-                  {
-                    $group: {
-                      _id: "$products.name",
-                      count: { $sum: { $ifNull: ["$products.quantity", 1] } },
-                    },
-                  },
-                  { $sort: { count: -1 } },
-                  { $limit: 20 },
-                  { $project: { _id: 0, name: "$_id", count: 1 } },
-                ],
               },
             },
           ],
@@ -130,8 +108,6 @@ async function cashmemoRoutes(fastify) {
       return reply.send({
         ...active,
         deletedCount: result.deleted[0]?.deletedCount ?? 0,
-        testCounts: result.testCounts ?? [],
-        productCounts: result.productCounts ?? [],
       });
     } catch (err) {
       req.log.error(err);

@@ -428,11 +428,11 @@ async function indoorPatientRoutes(fastify) {
               "supervisorDoctor.name": 1,
               admittedAt: 1,
               releasedAt: 1,
-              dealType: 1,
-              payments: 1,
-              expenses: 1,
-              bedCharges: 1,
-              waivers: 1,
+              // dealType: 1,
+              // payments: 1,
+              // expenses: 1,
+              // bedCharges: 1,
+              // waivers: 1,
             },
           })
           .sort({ admittedAt: -1 })
