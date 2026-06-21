@@ -1,7 +1,10 @@
 import { ObjectId } from "mongodb";
 
-async function reportRoutes(fastify, options) {
+async function outdoorReportRoutes(fastify, options) {
   const invoicesCollection = () => fastify.mongo.db.collection("invoices");
+  const labId = (req) => new ObjectId(req.user.labId);
+
+  fastify.addHook("onRequest", fastify.authenticate);
 
   // ============================================================================
   // POST /report/add
@@ -15,7 +18,7 @@ async function reportRoutes(fastify, options) {
         return reply.code(400).send({ error: "report, invoiceId and testId are required" });
       }
 
-      const invoice = await invoicesCollection().findOne({ invoiceId });
+      const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
@@ -43,7 +46,7 @@ async function reportRoutes(fastify, options) {
       };
 
       const result = await invoicesCollection().updateOne(
-        { invoiceId },
+        { invoiceId, labId: labId(req) },
         {
           $set: {
             [`tests.${testIndex}.report`]: reportWithDates,
@@ -76,7 +79,7 @@ async function reportRoutes(fastify, options) {
         return reply.code(400).send({ error: "report, invoiceId and testId are required" });
       }
 
-      const invoice = await invoicesCollection().findOne({ invoiceId });
+      const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
@@ -100,7 +103,7 @@ async function reportRoutes(fastify, options) {
       };
 
       const result = await invoicesCollection().updateOne(
-        { invoiceId },
+        { invoiceId, labId: labId(req) },
         {
           $set: {
             [`tests.${testIndex}.report`]: reportWithDates,
@@ -138,7 +141,7 @@ async function reportRoutes(fastify, options) {
         return reply.code(400).send({ error: "At least one of sampleCollectionDate or reportDate is required" });
       }
 
-      const invoice = await invoicesCollection().findOne({ invoiceId });
+      const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
@@ -157,7 +160,7 @@ async function reportRoutes(fastify, options) {
         dateFields[`tests.${testIndex}.report.reportDate`] = reportDate;
       }
 
-      const result = await invoicesCollection().updateOne({ invoiceId }, { $set: dateFields });
+      const result = await invoicesCollection().updateOne({ invoiceId, labId: labId(req) }, { $set: dateFields });
 
       if (result.modifiedCount === 0) {
         return reply.code(400).send({ error: "Failed to update dates" });
@@ -178,7 +181,7 @@ async function reportRoutes(fastify, options) {
     try {
       const { invoiceId, testId } = req.params;
 
-      const invoice = await invoicesCollection().findOne({ invoiceId });
+      const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) {
         return reply.code(404).send({ error: "Invoice not found" });
       }
@@ -215,7 +218,7 @@ async function reportRoutes(fastify, options) {
     try {
       const invoices = await invoicesCollection()
         .aggregate([
-          { $match: { "tests.isCompleted": true } },
+          { $match: { labId: labId(req), "tests.isCompleted": true } },
           { $unwind: { path: "$tests", includeArrayIndex: "testIndex" } },
           { $match: { "tests.isCompleted": true } },
           {
@@ -248,4 +251,4 @@ async function reportRoutes(fastify, options) {
   });
 }
 
-export default reportRoutes;
+export default outdoorReportRoutes;

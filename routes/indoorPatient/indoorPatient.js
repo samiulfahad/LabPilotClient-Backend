@@ -8,7 +8,7 @@
  * {
  *   _id                : ObjectId,
  *   labId              : ObjectId,
- *   admissionId        : String,          // e.g. "IPD-20240601-0001"
+ *   admissionId        : String,          // e.g. "IP482XK" (IP + 3 digits[1-9] + 2 letters[no O])
  *   status             : "admitted" | "released",
  *
  *   patient: {
@@ -39,6 +39,18 @@
  *   }],
  *
  *   expenses: [{ type, itemId, name, price, quantity, total, note, addedAt, addedBy }],
+ *
+ *   reports: [{
+ *     testId      : ObjectId,        // same ID as the matching expenses[].itemId for that test
+ *     name        : String,
+ *     schemaId    : ObjectId,
+ *     report      : Object,          // arbitrary report body, set on add/update
+ *     isCompleted : Boolean,
+ *     completedAt : Number | null,
+ *     updatedAt   : Number | null,
+ *     addedAt     : Number,
+ *     addedBy     : { id, name },
+ *   }],
  *
  *   bedCharges: [{
  *     date      : String,   // "YYYY-MM-DD" BST
@@ -119,15 +131,6 @@ const packageDealSchema = {
   properties: {
     description: { type: "string", maxLength: 500 },
     totalAmount: { type: "number", minimum: 0 },
-  },
-};
-
-const bedChargeWaiverSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    amount: { type: "number", minimum: 0 },
-    note: { type: "string", maxLength: 300 },
   },
 };
 
@@ -272,6 +275,9 @@ const addExpenseSchema = {
         price: { type: "number", minimum: 0 },
         quantity: { type: "integer", minimum: 1, default: 1 },
         note: { type: "string", maxLength: 300 },
+        // Only meaningful when type === "test". Presence (+ a valid itemId) marks
+        // the test as "online" and creates a tracked entry in reports[].
+        schemaId: nullableObjectIdSchema,
       },
     },
   },
@@ -312,56 +318,23 @@ const releasePatientSchema = {
 const now = () => Date.now();
 const by = (req) => ({ id: req.user.id, name: req.user.name });
 
-// BST = UTC+6. Convert a UTC timestamp to a "YYYY-MM-DD" string in BST.
-const tsBstDate = (ts) => {
-  const d = new Date(ts + 6 * 3600 * 1000);
-  return d.toISOString().slice(0, 10);
-};
-
-// Generate human-readable admission ID: IPD-YYYYMMDD-NNNN
+// Generate human-readable admission ID: IPnnnLL (e.g. IP482XK)
+// 3 digits (1-9, never 0) + 2 uppercase letters (excluding O)
 const generateAdmissionId = async (col, labId) => {
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const prefix = `IPD-${dateStr}-`;
-  const lastDoc = await col
-    .find({ labId, admissionId: { $regex: `^${prefix}` } })
-    .sort({ admissionId: -1 })
-    .limit(1)
-    .toArray();
-  const seq = lastDoc.length > 0 ? parseInt(lastDoc[0].admissionId.split("-").pop(), 10) + 1 : 1;
-  return `${prefix}${String(seq).padStart(4, "0")}`;
-};
+  const DIGIT_CHARS = "123456789";
+  const LETTER_CHARS = "ABCDEFGHIJKLMNPQRSTUVWXYZ"; // O excluded
+  const maxAttempts = 10;
 
-// Resolve which space (and chargePerDay) a patient was in on a given BST date string.
-const resolveSpaceForDate = (admission, targetDate) => {
-  const admissionDate = tsBstDate(admission.admittedAt);
-  const releaseDate = admission.releasedAt ? tsBstDate(admission.releasedAt) : null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let candidate = "IP";
+    for (let i = 0; i < 3; i++) candidate += DIGIT_CHARS[Math.floor(Math.random() * DIGIT_CHARS.length)];
+    for (let i = 0; i < 2; i++) candidate += LETTER_CHARS[Math.floor(Math.random() * LETTER_CHARS.length)];
 
-  if (targetDate < admissionDate) return null;
-  if (releaseDate && targetDate > releaseDate) return null;
-
-  for (const h of admission.wardHistory ?? []) {
-    if (!h.fromDate || !h.toDate) continue;
-    const from = tsBstDate(h.fromDate);
-    const to = tsBstDate(h.toDate);
-    if (targetDate >= from && targetDate < to) {
-      return {
-        spaceName: h.fromSpaceName,
-        bedNumber: h.fromBedNumber ?? null,
-        amount: h.chargePerDay ?? admission.space.chargePerDay,
-      };
-    }
+    const exists = await col.findOne({ labId, admissionId: candidate }, { projection: { _id: 1 } });
+    if (!exists) return candidate;
   }
 
-  const currentFrom = admission.space.fromDate ? tsBstDate(admission.space.fromDate) : admissionDate;
-  if (targetDate >= currentFrom) {
-    return {
-      spaceName: admission.space.spaceName,
-      bedNumber: admission.space.bedNumber ?? null,
-      amount: admission.space.chargePerDay,
-    };
-  }
-
-  return null;
+  throw new Error("Failed to generate unique admission ID after multiple attempts");
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -428,11 +401,6 @@ async function indoorPatientRoutes(fastify) {
               "supervisorDoctor.name": 1,
               admittedAt: 1,
               releasedAt: 1,
-              // dealType: 1,
-              // payments: 1,
-              // expenses: 1,
-              // bedCharges: 1,
-              // waivers: 1,
             },
           })
           .sort({ admittedAt: -1 })
@@ -544,6 +512,7 @@ async function indoorPatientRoutes(fastify) {
         packageDeal: dealType === "package" ? packageDeal : null,
         wardHistory: [],
         expenses: [],
+        reports: [],
         bedCharges: [],
         waivers: [],
         payments: [],
@@ -757,28 +726,46 @@ async function indoorPatientRoutes(fastify) {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { type, itemId, name, price, quantity, note } = req.body;
+      const { type, itemId, name, price, quantity, note, schemaId } = req.body;
 
       const addedAt = now();
-      const result = await col().updateOne(
-        { _id, labId: labId(req) },
-        {
-          $push: {
-            expenses: {
-              type,
-              itemId: itemId ? toObjectId(itemId) : null,
-              name: name.trim(),
-              price,
-              quantity,
-              total: price * quantity,
-              note: note ?? "",
-              addedAt,
-              addedBy: by(req),
-            },
+      const addedBy = by(req);
+      const resolvedItemId = itemId ? toObjectId(itemId) : null;
+
+      const update = {
+        $push: {
+          expenses: {
+            type,
+            itemId: resolvedItemId,
+            name: name.trim(),
+            price,
+            quantity,
+            total: price * quantity,
+            note: note ?? "",
+            addedAt,
+            addedBy,
           },
-          $set: { updated: { at: addedAt, by: by(req) } },
         },
-      );
+        $set: { updated: { at: addedAt, by: addedBy } },
+      };
+
+      // A "test" expense with a schemaId is an online test — track it for report
+      // upload separately from billing. Requires a valid itemId to look up later.
+      if (type === "test" && schemaId && resolvedItemId) {
+        update.$push.reports = {
+          testId: resolvedItemId,
+          name: name.trim(),
+          schemaId: toObjectId(schemaId),
+          report: {},
+          isCompleted: false,
+          completedAt: null,
+          updatedAt: null,
+          addedAt,
+          addedBy,
+        };
+      }
+
+      const result = await col().updateOne({ _id, labId: labId(req) }, update);
 
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
       return reply.code(201).send({ success: true });

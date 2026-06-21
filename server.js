@@ -17,7 +17,12 @@ import staffRoutes from "./routes/staff/staff.js";
 import testRoutes from "./routes/test/test.js";
 import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
-import reportRoutes from "./routes/report/report.js";
+
+// Outdoor Report
+import outdoorReportRoutes from "./routes/report/outdoorReports.js";
+// Indoor Report
+import indoorReportRoutes from "./routes/report/indoorReports.js";
+
 
 // Daily Reports
 import cashmemoRoutes from "./routes/dailyReports/cashmemo/cashmemo.js";
@@ -117,7 +122,12 @@ fastify.register(staffRoutes, { prefix: API });
 fastify.register(testRoutes, { prefix: API });
 fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
-fastify.register(reportRoutes, { prefix: API });
+
+// Outdoor Reports
+fastify.register(outdoorReportRoutes, { prefix: API });
+// Indoor Reports
+fastify.register(indoorReportRoutes, { prefix: API });
+
 fastify.register(accountRoutes, { prefix: API });
 fastify.register(billingRoutes, { prefix: API });
 fastify.register(doctorRoutes , { prefix: API });
