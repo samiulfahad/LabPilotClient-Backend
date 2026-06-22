@@ -40,25 +40,21 @@
  *
  *   expenses: [{ type, itemId, name, price, quantity, total, note, addedAt, addedBy }],
  *
- *   reports: [{
- *     testId      : ObjectId,        // same ID as the matching expenses[].itemId for that test
- *     name        : String,
- *     schemaId    : ObjectId,
- *     report      : Object,          // arbitrary report body, set on add/update
- *     isCompleted : Boolean,
- *     completedAt : Number | null,
- *     updatedAt   : Number | null,
- *     addedAt     : Number,
- *     addedBy     : { id, name },
- *   }],
+ *   reports: [
+ *     // online test (schemaId present) — full report tracking
+ *     { testId, name, schemaId, report: {}, isCompleted, completedAt, updatedAt, addedAt, addedBy }
+ *
+ *     // offline test (no schemaId) — visibility only
+ *     { testId, name, schemaId: null, addedAt, addedBy }
+ *   ],
  *
  *   bedCharges: [{
  *     date      : String,   // "YYYY-MM-DD" BST
  *     spaceName : String,
  *     bedNumber : Number | null,
- *     amount    : Number,   // chargePerDay of that space
+ *     amount    : Number,
  *     waiver    : { amount: Number, note: String } | null,
- *     net       : Number,   // amount - waiver.amount (or same as amount if no waiver)
+ *     net       : Number,
  *     addedAt   : Number,
  *     addedBy   : { id, name },
  *   }],
@@ -275,8 +271,7 @@ const addExpenseSchema = {
         price: { type: "number", minimum: 0 },
         quantity: { type: "integer", minimum: 1, default: 1 },
         note: { type: "string", maxLength: 300 },
-        // Only meaningful when type === "test". Presence (+ a valid itemId) marks
-        // the test as "online" and creates a tracked entry in reports[].
+        // Only relevant when type === "test". If present, the test is online.
         schemaId: nullableObjectIdSchema,
       },
     },
@@ -430,6 +425,52 @@ async function indoorPatientRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to fetch indoor patient" });
     }
   });
+
+  // ── GET /indoor-patient/by-admission-id/:admissionId ────────────────────────
+  fastify.get(
+    "/indoor-patient/by-admission-id/:admissionId",
+    {
+      schema: {
+        tags: ["IndoorPatients"],
+        summary: "Get indoor patient by human-readable admission ID — for report lookup",
+        params: {
+          type: "object",
+          required: ["admissionId"],
+          properties: {
+            admissionId: {
+              type: "string",
+              pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
+              minLength: 7,
+              maxLength: 7,
+            },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const patient = await col().findOne(
+          { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
+          {
+            projection: {
+              admissionId: 1,
+              status: 1,
+              patient: 1,
+              reports: 1,
+              space: 1,
+              supervisorDoctor: 1,
+              admittedAt: 1,
+            },
+          },
+        );
+        if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
+        return reply.send(patient);
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to fetch indoor patient" });
+      }
+    },
+  );
 
   // ── POST /indoor-patient/admit ───────────────────────────────────────────────
   fastify.post("/indoor-patient/admit", admitPatientSchema, async (req, reply) => {
@@ -749,24 +790,32 @@ async function indoorPatientRoutes(fastify) {
         $set: { updated: { at: addedAt, by: addedBy } },
       };
 
-      // A "test" expense with a schemaId is an online test — track it for report
-      // upload separately from billing. Requires a valid itemId to look up later.
-      if (type === "test" && schemaId && resolvedItemId) {
-        update.$push.reports = {
-          testId: resolvedItemId,
-          name: name.trim(),
-          schemaId: toObjectId(schemaId),
-          report: {},
-          isCompleted: false,
-          completedAt: null,
-          updatedAt: null,
-          addedAt,
-          addedBy,
-        };
+      // Every test gets a reports[] entry for full visibility.
+      // schemaId present  → online test: full report tracking shape.
+      // schemaId absent   → offline test: lightweight tracking only.
+      if (type === "test" && resolvedItemId) {
+        update.$push.reports = schemaId
+          ? {
+              testId: resolvedItemId,
+              name: name.trim(),
+              schemaId: toObjectId(schemaId),
+              report: {},
+              isCompleted: false,
+              completedAt: null,
+              updatedAt: null,
+              addedAt,
+              addedBy,
+            }
+          : {
+              testId: resolvedItemId,
+              name: name.trim(),
+              schemaId: null,
+              addedAt,
+              addedBy,
+            };
       }
 
       const result = await col().updateOne({ _id, labId: labId(req) }, update);
-
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
       return reply.code(201).send({ success: true });
     } catch (err) {
@@ -775,6 +824,7 @@ async function indoorPatientRoutes(fastify) {
     }
   });
 
+  // ── POST /indoor-patient/:id/bed-charge-adjustment ──────────────────────────
   fastify.post("/indoor-patient/:id/bed-charge-adjustment", bedChargeAdjustmentSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
