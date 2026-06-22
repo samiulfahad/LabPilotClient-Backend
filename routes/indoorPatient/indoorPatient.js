@@ -456,10 +456,7 @@ async function indoorPatientRoutes(fastify) {
               admissionId: 1,
               status: 1,
               patient: 1,
-              reports: 1,
-              space: 1,
-              supervisorDoctor: 1,
-              admittedAt: 1,
+              reports: 1
             },
           },
         );
