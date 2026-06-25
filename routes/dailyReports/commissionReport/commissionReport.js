@@ -60,6 +60,7 @@ async function commissionReportRoutes(fastify) {
                     net: { $ifNull: ["$amount.net", 0] },
                     commission: { $ifNull: ["$amount.referrerCommission", 0] },
                     discount: { $ifNull: ["$amount.referrerDiscount", 0] },
+                    tests: "$tests.name",
                   },
                 },
               },
