@@ -121,11 +121,11 @@ const diseaseSchema = {
   },
 };
 
-// ─── Discount Schema ──────────────────────────────────────────────────────────
+// ─── Updated Discount Schema ──────────────────────────────────────────────────
 const addDiscountSchema = {
   schema: {
     tags: ["IndoorPatients"],
-    summary: "Add a discount to a specific expense category",
+    summary: "Add a discount to a specific expense category or grand total",
     params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
     body: {
       type: "object",
@@ -134,16 +134,15 @@ const addDiscountSchema = {
       properties: {
         category: {
           type: "string",
-          enum: ["test", "medicine", "bed-charge", "product", "other"],
+          enum: ["test", "medicine", "bed-charge", "product", "other", "grand-total"],
         },
         amount: { type: "number", minimum: 0.01 },
-        providedBy: { type: "string", enum: ["lab", "hospital", "referrer"] },
+        providedBy: { type: "string", enum: ["hospital", "doctor", "referrer"] },
         note: { type: "string", maxLength: 300 },
       },
     },
   },
 };
-
 const packageDealSchema = {
   type: "object",
   additionalProperties: false,
@@ -422,43 +421,69 @@ async function indoorPatientRoutes(fastify) {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-
       const { category, amount, providedBy, note } = req.body;
-
-      // Fetch patient to validate cap
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
 
-      // Calculate category total to enforce cap
       const expenses = admission.expenses ?? [];
+
+      // ── Compute category gross total ─────────────────────────────────────────
       let categoryTotal = 0;
 
-      if (category === "bed-charge") {
-        // Recompute accrual server-side (simplified: sum wardHistory + current space)
-        // We store this as a flat amount — frontend sends validated amount, but we
-        // re-validate against a rough server-side cap using bedCharges if present,
-        // or allow it (frontend already enforces). For safety, skip server cap for
-        // bed-charge and trust frontend validation.
+      if (category === "grand-total") {
+        // Grand-total discount: cap against the entire bill (expenses + bed charges)
+        const expenseTotal = expenses.reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
+
+        // Bed charge accrual (server-side approximate; mirrors frontend calcBedAccrual)
+        let bedTotal = 0;
+        if (admission.dealType === "regular") {
+          const tsBst = (ts) => new Date(ts + 6 * 3600 * 1000).toISOString().slice(0, 10);
+          const startStr = tsBst(admission.admittedAt);
+          const endStr = admission.releasedAt ? tsBst(admission.releasedAt) : tsBst(Date.now());
+          const startD = new Date(startStr + "T00:00:00Z");
+          const endD = new Date(endStr + "T00:00:00Z");
+          const cur = new Date(startD);
+          while (cur <= endD) {
+            const d = cur.toISOString().slice(0, 10);
+            let daily = admission.space.chargePerDay;
+            for (const h of admission.wardHistory ?? []) {
+              if (!h.fromDate || !h.toDate) continue;
+              const from = tsBst(h.fromDate);
+              const to = tsBst(h.toDate);
+              if (d >= from && d < to) {
+                daily = h.chargePerDay ?? admission.space.chargePerDay;
+                break;
+              }
+            }
+            bedTotal += daily;
+            cur.setUTCDate(cur.getUTCDate() + 1);
+          }
+        }
+
+        const packageTotal = admission.dealType === "package" ? (admission.packageDeal?.totalAmount ?? 0) : 0;
+        categoryTotal = admission.dealType === "package" ? packageTotal : expenseTotal + bedTotal;
+      } else if (category === "bed-charge") {
+        // Allow any reasonable amount; frontend already enforces the cap
         categoryTotal = Infinity;
       } else {
         const typeMap = {
-          test: "test",
-          medicine: "medicine",
-          product: "product",
+          test: ["test"],
+          medicine: ["medicine"],
+          product: ["product"],
           other: ["service", "other"],
         };
-        const matchTypes = Array.isArray(typeMap[category]) ? typeMap[category] : [typeMap[category]];
+        const matchTypes = typeMap[category] ?? [category];
         categoryTotal = expenses
           .filter((e) => matchTypes.includes(e.type))
           .reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
       }
 
-      // Sum existing discounts for this category
+      // ── Check existing discounts for this category ───────────────────────────
       const existingDiscount = (admission.discounts ?? [])
         .filter((d) => d.category === category)
         .reduce((s, d) => s + d.amount, 0);
 
-      if (existingDiscount + amount > categoryTotal) {
+      if (categoryTotal !== Infinity && existingDiscount + amount > categoryTotal) {
         return reply.code(400).send({
           error: `Total discount for "${category}" (${existingDiscount + amount}) exceeds category total (${categoryTotal})`,
         });
@@ -705,6 +730,10 @@ async function indoorPatientRoutes(fastify) {
 
       const { spaceId, bedNumber, note } = req.body;
 
+      // Guard: prevent "transferring" to the cabin the patient is already in
+      if (admission.space?.spaceId?.toString() === toObjectId(spaceId)?.toString())
+        return reply.code(400).send({ error: "Patient is already admitted in this cabin" });
+
       const newSpace = await spacesCol().findOne({ _id: toObjectId(spaceId), labId: labId(req) });
       if (!newSpace) return reply.code(404).send({ error: "Target space not found" });
 
@@ -800,12 +829,14 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { doctorId, note } = req.body;
 
-      const [admission, doctor] = await Promise.all([
-        col().findOne({ _id, labId: labId(req) }),
-        doctorsCol().findOne({ _id: toObjectId(doctorId), labId: labId(req) }),
-      ]);
-
+      const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
+
+      // Guard: prevent "changing" to the doctor already supervising this patient
+      if (admission.supervisorDoctor?.doctorId?.toString() === toObjectId(doctorId)?.toString())
+        return reply.code(400).send({ error: "Patient is already under this doctor" });
+
+      const doctor = await doctorsCol().findOne({ _id: toObjectId(doctorId), labId: labId(req) });
       if (!doctor) return reply.code(404).send({ error: "Doctor not found" });
 
       const changedAt = now();
