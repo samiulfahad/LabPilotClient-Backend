@@ -1,9 +1,10 @@
 /**
  * departmentRoutes.js
- * Serves the canonical department and designation lists. No per-hospital DB storage.
+ * Serves the canonical department, designation, and staff-permission lists.
+ * No per-hospital DB storage.
  */
 
-export const ALLOWED_DEPARTMENTS = [
+export const ALLOWED_MED_DEPARTMENTS = [
   { value: "anesthesiology", label: "Anesthesiology" },
   { value: "cardiology", label: "Cardiology" },
   { value: "dentistry", label: "Dentistry" },
@@ -46,23 +47,40 @@ export const ALLOWED_DESIGNATIONS = [
   { value: "other", label: "Other" },
 ];
 
-export const ALLOWED_VALUES = new Set(ALLOWED_DEPARTMENTS.map((d) => d.value));
-export const ALLOWED_DESIG_VALUES = new Set(ALLOWED_DESIGNATIONS.map((d) => d.value));
+export const ALLOWED_PERMISSIONS = [
+  { key: "createInvoice", label: "ইনভয়েস তৈরি", icon: "FilePlus", color: "#3B82F6" },
+  { key: "editInvoice", label: "ইনভয়েস সম্পাদনা", icon: "FileEdit", color: "#F59E0B" },
+  { key: "deleteInvoice", label: "ইনভয়েস মুছুন", icon: "Trash2", color: "#EF4444" },
+  { key: "cashmemo", label: "ক্যাশমেমো", icon: "FileText", color: "#10B981" },
+  { key: "uploadReport", label: "রিপোর্ট আপলোড", icon: "Upload", color: "#8B5CF6" },
+  { key: "downloadReport", label: "রিপোর্ট ডাউনলোড", icon: "Download", color: "#0D9488" },
+];
 
-async function departmentRoutes(fastify) {
-  // ── GET /departments ────────────────────────────────────────────────────────
+export const ALLOWED_DEPARTMENTS = new Set(ALLOWED_MED_DEPARTMENTS.map((d) => d.value));
+export const ALLOWED_DESIG_VALUES = new Set(ALLOWED_DESIGNATIONS.map((d) => d.value));
+export const ALLOWED_PERM_KEYS = new Set(ALLOWED_PERMISSIONS.map((p) => p.key));
+
+async function staticDataRoutes(fastify) {
+  // ── GET /departments ──────────────────────────────────────────────────────
   fastify.get(
     "/departments",
     { schema: { tags: ["Departments"], summary: "Get all available departments" } },
     async (_req, reply) => reply.send({ departments: ALLOWED_DEPARTMENTS }),
   );
 
-  // ── GET /designations ───────────────────────────────────────────────────────
+  // ── GET /designations ─────────────────────────────────────────────────────
   fastify.get(
     "/designations",
     { schema: { tags: ["Departments"], summary: "Get all available designations" } },
     async (_req, reply) => reply.send({ designations: ALLOWED_DESIGNATIONS }),
   );
+
+  // ── GET /staff-permissions ────────────────────────────────────────────────
+  fastify.get(
+    "/staff-permissions",
+    { schema: { tags: ["Staff"], summary: "Get all available staff permissions" } },
+    async (_req, reply) => reply.send({ permissions: ALLOWED_PERMISSIONS }),
+  );
 }
 
-export default departmentRoutes;
+export default staticDataRoutes;

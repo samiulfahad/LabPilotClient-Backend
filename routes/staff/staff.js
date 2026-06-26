@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import toObjectId from "../../utils/db.js";
 import generateInvoiceId from "../../utils/generateInvoiceId.js";
+import { ALLOWED_PERMISSIONS } from "../staticData/staticData.js";
 
 const collectionName = "staffs";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,14 +28,7 @@ const staffIdParamSchema = {
 const permissionsSchema = {
   type: "object",
   description: "Staff permissions",
-  properties: {
-    createInvoice: { type: "boolean" },
-    editInvoice: { type: "boolean" },
-    deleteInvoice: { type: "boolean" },
-    cashmemo: { type: "boolean" },
-    uploadReport: { type: "boolean" },
-    downloadReport: { type: "boolean" },
-  },
+  properties: Object.fromEntries(ALLOWED_PERMISSIONS.map((p) => [p.key, { type: "boolean" }])),
   additionalProperties: false,
 };
 
@@ -129,14 +123,9 @@ const deleteStaffSchema = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const normalizePermissions = (perms = {}) => ({
-  createInvoice: perms.createInvoice ?? false,
-  editInvoice: perms.editInvoice ?? false,
-  deleteInvoice: perms.deleteInvoice ?? false,
-  cashmemo: perms.cashmemo ?? false,
-  uploadReport: perms.uploadReport ?? false,
-  downloadReport: perms.downloadReport ?? false,
-});
+// Derived from ALLOWED_PERMISSIONS so it never drifts out of sync
+const normalizePermissions = (perms = {}) =>
+  Object.fromEntries(ALLOWED_PERMISSIONS.map((p) => [p.key, perms[p.key] ?? false]));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -214,7 +203,8 @@ async function staffRoutes(fastify, options) {
       }
 
       const password = generateInvoiceId();
-      const hashedPassword = await bcrypt.hash(password, 10)
+      const hashedPassword = await bcrypt.hash(password, 10);
+
       const result = await collection.insertOne({
         labId: labId(req),
         labKey: parseInt(req.user.labKey),
@@ -229,8 +219,7 @@ async function staffRoutes(fastify, options) {
         created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
       });
 
-      const message = `LabPilotPro.com-এ আপনাকে স্বাগতম। আপনার পাসওয়ার্ড ${password} এবং ল্যাব আইডি ${req.user.labKey} , লগইন করার পর পাসওয়ার্ডটি পরিবর্তন করুন 
-      `;
+      const message = `LabPilotPro.com-এ আপনাকে স্বাগতম। আপনার পাসওয়ার্ড ${password} এবং ল্যাব আইডি ${req.user.labKey} , লগইন করার পর পাসওয়ার্ডটি পরিবর্তন করুন`;
 
       fastify.sendSMS({ number: phone, message });
 
@@ -273,6 +262,8 @@ async function staffRoutes(fastify, options) {
         { $set: updateData },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+
+      await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
 
       return { message: "Staff updated successfully" };
     } catch (err) {

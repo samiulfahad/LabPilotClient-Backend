@@ -3,7 +3,7 @@
  */
 
 import toObjectId from "../../utils/db.js";
-import { ALLOWED_VALUES, ALLOWED_DESIG_VALUES } from "../department/department.js";
+import { ALLOWED_DEPARTMENTS, ALLOWED_DESIG_VALUES } from "../staticData/staticData.js";
 
 const collectionName = "doctors";
 const PAGE_SIZE = 20;
@@ -95,7 +95,7 @@ const deleteDoctorSchema = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const validateDepartments = (departments) => departments.filter((d) => !ALLOWED_VALUES.has(d));
+const validateDepartments = (departments) => departments.filter((d) => !ALLOWED_DEPARTMENTS.has(d));
 const validateDesignation = (designation) => designation && !ALLOWED_DESIG_VALUES.has(designation);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────

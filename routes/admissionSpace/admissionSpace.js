@@ -28,7 +28,7 @@
  */
 
 import toObjectId from "../../utils/db.js";
-import { ALLOWED_VALUES } from "../department/department.js";
+import { ALLOWED_DEPARTMENTS } from "../staticData/staticData.js";
 
 const COLLECTION = "admissionSpaces";
 
@@ -68,7 +68,7 @@ const multiBedConfSchema = {
 // departments driven by the canonical list from departmentRoutes
 const departmentsSchema = {
   type: "array",
-  items: { type: "string", enum: [...ALLOWED_VALUES] },
+  items: { type: "string", enum: [...ALLOWED_DEPARTMENTS] },
   minItems: 1,
   uniqueItems: true,
 };
@@ -90,7 +90,7 @@ const getAllSpacesSchema = {
     querystring: {
       type: "object",
       properties: {
-        department: { type: "string", enum: [...ALLOWED_VALUES, "all"] },
+        department: { type: "string", enum: [...ALLOWED_DEPARTMENTS, "all"] },
       },
     },
   },

@@ -37,7 +37,6 @@ async function authRoutes(fastify) {
           registrationNumber: 1,
           "contact.primary": 1,
           "contact.address": 1,
-          "contact.district": 1,
           "contact.publicEmail": 1
         },
       },

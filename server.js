@@ -37,7 +37,7 @@ import indoorPatientRoutes from "./routes/indoorPatient/indoorPatient.js";
 import admissionSpaceRoutes from "./routes/admissionSpace/admissionSpace.js";
 
 import internalRoutes from "./routes/internal/internal.js";
-import departmentRoutes from "./routes/department/department.js";
+import staticDataRoutes from "./routes/staticData/staticData.js";
 
 
 dotenv.config();
@@ -133,7 +133,7 @@ fastify.register(billingRoutes, { prefix: API });
 fastify.register(doctorRoutes , { prefix: API });
 fastify.register(indoorPatientRoutes , { prefix: API });
 fastify.register(admissionSpaceRoutes , { prefix: API });
-fastify.register(departmentRoutes , { prefix: API });
+fastify.register(staticDataRoutes , { prefix: API });
 
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
