@@ -1,80 +1,5 @@
 /**
  * indoorPatients.routes.js
- * Fastify routes for Indoor Patient Admission Management
- *
- * Collection: indoorPatients
- *
- * Document shape:
- * {
- *   _id                : ObjectId,
- *   labId              : ObjectId,
- *   admissionId        : String,          // e.g. "IP482XK" (IP + 3 digits[1-9] + 2 letters[no O])
- *   status             : "admitted" | "released",
- *
- *   patient: {
- *     name, age, gender, bloodGroup, contactNumber, address,
- *     guardian: { name, relation, contactNumber },
- *   },
- *
- *   disease: { description, medicalHistory },
- *
- *   space: {
- *     spaceId, spaceName, bedNumber, chargePerDay,
- *     fromDate : Number,
- *   },
- *
- *   supervisorDoctor : { doctorId, name, degree },
- *   doctorHistory    : [...],
- *   referrer         : { referrerId, name, type },
- *
- *   dealType    : "package" | "regular",
- *   packageDeal : { description, totalAmount } | null,
- *
- *   wardHistory: [{
- *     fromSpaceId, fromSpaceName, fromBedNumber,
- *     toSpaceId, toSpaceName, toBedNumber,
- *     chargePerDay,
- *     fromDate, toDate,
- *     movedAt, movedBy, note,
- *   }],
- *
- *   expenses: [{ type, itemId, name, price, quantity, total, note, addedAt, addedBy }],
- *
- *   reports: [
- *     // online test (schemaId present) — full report tracking
- *     { testId, name, schemaId, report: {}, isCompleted, completedAt, updatedAt, addedAt, addedBy }
- *
- *     // offline test (no schemaId) — visibility only
- *     { testId, name, schemaId: null, addedAt, addedBy }
- *   ],
- *
- *   bedCharges: [{
- *     date      : String,   // "YYYY-MM-DD" BST
- *     spaceName : String,
- *     bedNumber : Number | null,
- *     amount    : Number,
- *     waiver    : { amount: Number, note: String } | null,
- *     net       : Number,
- *     addedAt   : Number,
- *     addedBy   : { id, name },
- *   }],
- *
- *   waivers: [{
- *     type      : "bed-charge" | "bed-charge-bulk",
- *     refDate   : String | null,
- *     refDates  : [String] | null,
- *     amount    : Number,
- *     note      : String,
- *     appliedAt : Number,
- *     appliedBy : { id, name },
- *   }],
- *
- *   payments : [{ amount, collectedBy: { id, name }, collectedAt, note }],
- *
- *   admittedAt, admittedBy, releasedAt, releasedBy,
- *   created: { at, by },
- *   updated: { at, by },
- * }
  */
 
 import toObjectId from "../../utils/db.js";
@@ -121,28 +46,6 @@ const diseaseSchema = {
   },
 };
 
-// ─── Updated Discount Schema ──────────────────────────────────────────────────
-const addDiscountSchema = {
-  schema: {
-    tags: ["IndoorPatients"],
-    summary: "Add a discount to a specific expense category or grand total",
-    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
-    body: {
-      type: "object",
-      required: ["category", "amount", "providedBy"],
-      additionalProperties: false,
-      properties: {
-        category: {
-          type: "string",
-          enum: ["test", "medicine", "bed-charge", "product", "other", "grand-total"],
-        },
-        amount: { type: "number", minimum: 0.01 },
-        providedBy: { type: "string", enum: ["hospital", "doctor", "referrer"] },
-        note: { type: "string", maxLength: 300 },
-      },
-    },
-  },
-};
 const packageDealSchema = {
   type: "object",
   additionalProperties: false,
@@ -181,7 +84,7 @@ const getPatientSchema = {
     params: {
       type: "object",
       required: ["id"],
-      properties: { id: { ...objectIdSchema, description: "ObjectId of the indoor patient record" } },
+      properties: { id: objectIdSchema },
     },
   },
 };
@@ -262,7 +165,7 @@ const changeDoctorSchema = {
 const addExpenseSchema = {
   schema: {
     tags: ["IndoorPatients"],
-    summary: "Add an expense item (medicine, test, service, etc.)",
+    summary: "Add an expense item",
     params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
     body: {
       type: "object",
@@ -275,8 +178,29 @@ const addExpenseSchema = {
         price: { type: "number", minimum: 0 },
         quantity: { type: "integer", minimum: 1, default: 1 },
         note: { type: "string", maxLength: 300 },
-        // Only relevant when type === "test". If present, the test is online.
         schemaId: nullableObjectIdSchema,
+      },
+    },
+  },
+};
+
+const addDiscountSchema = {
+  schema: {
+    tags: ["IndoorPatients"],
+    summary: "Add a discount to a specific expense category or grand total",
+    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
+    body: {
+      type: "object",
+      required: ["category", "amount", "providedBy"],
+      additionalProperties: false,
+      properties: {
+        category: {
+          type: "string",
+          enum: ["test", "medicine", "bed-charge", "product", "other", "grand-total"],
+        },
+        amount: { type: "number", minimum: 0.01 },
+        providedBy: { type: "string", enum: ["hospital", "doctor", "referrer"] },
+        note: { type: "string", maxLength: 300 },
       },
     },
   },
@@ -317,11 +241,9 @@ const releasePatientSchema = {
 const now = () => Date.now();
 const by = (req) => ({ id: req.user.id, name: req.user.name });
 
-// Generate human-readable admission ID: IPnnnLL (e.g. IP482XK)
-// 3 digits (1-9, never 0) + 2 uppercase letters (excluding O)
 const generateAdmissionId = async (col, labId) => {
   const DIGIT_CHARS = "123456789";
-  const LETTER_CHARS = "ABCDEFGHIJKLMNPQRSTUVWXYZ"; // O excluded
+  const LETTER_CHARS = "ABCDEFGHIJKLMNPQRSTUVWXYZ";
   const maxAttempts = 10;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -334,6 +256,30 @@ const generateAdmissionId = async (col, labId) => {
   }
 
   throw new Error("Failed to generate unique admission ID after multiple attempts");
+};
+
+// ─── Projection: full patient (GET /indoor-patient/:id) ───────────────────────
+// Excludes waivers and bedCharges — both legacy fields never read by the frontend.
+// reports kept: the /ipd/patient/:id/reports page fetches via getPatient().
+const PATIENT_FULL_PROJECTION = {
+  waivers: 0,
+  bedCharges: 0,
+};
+
+// ─── Projection: list row (GET /indoor-patients) ──────────────────────────────
+const PATIENT_LIST_PROJECTION = {
+  admissionId: 1,
+  status: 1,
+  patient: 1,
+  "space.spaceName": 1,
+  "space.bedNumber": 1,
+  "space.fromDate": 1,
+  "supervisorDoctor.name": 1,
+  expenses: 1, // needed for totalExpenses() in SearchPatient / AddItemsToPatient list
+  payments: 1, // needed for totalPayments() / due calculation in list rows
+  dealType: 1, // needed for package badge in list rows
+  admittedAt: 1,
+  releasedAt: 1,
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -389,19 +335,7 @@ async function indoorPatientRoutes(fastify) {
 
       const [patients, total] = await Promise.all([
         col()
-          .find(filter, {
-            projection: {
-              admissionId: 1,
-              status: 1,
-              patient: 1,
-              "space.spaceName": 1,
-              "space.bedNumber": 1,
-              "space.fromDate": 1,
-              "supervisorDoctor.name": 1,
-              admittedAt: 1,
-              releasedAt: 1,
-            },
-          })
+          .find(filter, { projection: PATIENT_LIST_PROJECTION })
           .sort({ admittedAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -416,111 +350,55 @@ async function indoorPatientRoutes(fastify) {
     }
   });
 
-  // ── POST /indoor-patient/:id/discount ────────────────────────────────────────
-  fastify.post("/indoor-patient/:id/discount", addDiscountSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { category, amount, providedBy, note } = req.body;
-      const admission = await col().findOne({ _id, labId: labId(req) });
-      if (!admission) return reply.code(404).send({ error: "Patient not found" });
-
-      const expenses = admission.expenses ?? [];
-
-      // ── Compute category gross total ─────────────────────────────────────────
-      let categoryTotal = 0;
-
-      if (category === "grand-total") {
-        // Grand-total discount: cap against the entire bill (expenses + bed charges)
-        const expenseTotal = expenses.reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
-
-        // Bed charge accrual (server-side approximate; mirrors frontend calcBedAccrual)
-        let bedTotal = 0;
-        if (admission.dealType === "regular") {
-          const tsBst = (ts) => new Date(ts + 6 * 3600 * 1000).toISOString().slice(0, 10);
-          const startStr = tsBst(admission.admittedAt);
-          const endStr = admission.releasedAt ? tsBst(admission.releasedAt) : tsBst(Date.now());
-          const startD = new Date(startStr + "T00:00:00Z");
-          const endD = new Date(endStr + "T00:00:00Z");
-          const cur = new Date(startD);
-          while (cur <= endD) {
-            const d = cur.toISOString().slice(0, 10);
-            let daily = admission.space.chargePerDay;
-            for (const h of admission.wardHistory ?? []) {
-              if (!h.fromDate || !h.toDate) continue;
-              const from = tsBst(h.fromDate);
-              const to = tsBst(h.toDate);
-              if (d >= from && d < to) {
-                daily = h.chargePerDay ?? admission.space.chargePerDay;
-                break;
-              }
-            }
-            bedTotal += daily;
-            cur.setUTCDate(cur.getUTCDate() + 1);
-          }
-        }
-
-        const packageTotal = admission.dealType === "package" ? (admission.packageDeal?.totalAmount ?? 0) : 0;
-        categoryTotal = admission.dealType === "package" ? packageTotal : expenseTotal + bedTotal;
-      } else if (category === "bed-charge") {
-        // Allow any reasonable amount; frontend already enforces the cap
-        categoryTotal = Infinity;
-      } else {
-        const typeMap = {
-          test: ["test"],
-          medicine: ["medicine"],
-          product: ["product"],
-          other: ["service", "other"],
-        };
-        const matchTypes = typeMap[category] ?? [category];
-        categoryTotal = expenses
-          .filter((e) => matchTypes.includes(e.type))
-          .reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
-      }
-
-      // ── Check existing discounts for this category ───────────────────────────
-      const existingDiscount = (admission.discounts ?? [])
-        .filter((d) => d.category === category)
-        .reduce((s, d) => s + d.amount, 0);
-
-      if (categoryTotal !== Infinity && existingDiscount + amount > categoryTotal) {
-        return reply.code(400).send({
-          error: `Total discount for "${category}" (${existingDiscount + amount}) exceeds category total (${categoryTotal})`,
-        });
-      }
-
-      const appliedAt = Date.now();
-      const result = await col().updateOne(
-        { _id, labId: labId(req) },
-        {
-          $push: {
-            discounts: {
-              category,
-              amount,
-              providedBy,
-              note: note ?? "",
-              appliedAt,
-              appliedBy: by(req),
-            },
+  // ── GET /indoor-patient/by-admission-id/:admissionId ────────────────────────
+fastify.get(
+  "/indoor-patient/by-admission-id/:admissionId",
+  {
+    schema: {
+      tags: ["IndoorPatients"],
+      summary: "Get indoor patient by human-readable admission ID",
+      params: {
+        type: "object",
+        required: ["admissionId"],
+        properties: {
+          admissionId: {
+            type: "string",
+            pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
+            minLength: 7,
+            maxLength: 7,
           },
-          $set: { updated: { at: appliedAt, by: by(req) } },
+        },
+      },
+    },
+  },
+  async (req, reply) => {
+    try {
+      const patient = await col().findOne(
+        { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
+        {
+          projection: {
+            admissionId: 1,
+            status: 1,
+            patient: 1,
+            reports: 1,
+          },
         },
       );
-
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
-      return reply.code(201).send({ success: true });
+      if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
+      return reply.send(patient);
     } catch (err) {
       req.log.error(err);
-      return reply.code(500).send({ error: "Failed to apply discount" });
+      return reply.code(500).send({ error: "Failed to fetch indoor patient" });
     }
-  });
+  },
+);
 
   // ── GET /indoor-patient/:id ──────────────────────────────────────────────────
   fastify.get("/indoor-patient/:id", getPatientSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const patient = await col().findOne({ _id, labId: labId(req) });
+      const patient = await col().findOne({ _id, labId: labId(req) }, { projection: PATIENT_FULL_PROJECTION });
       if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
       return reply.send(patient);
     } catch (err) {
@@ -528,49 +406,6 @@ async function indoorPatientRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to fetch indoor patient" });
     }
   });
-
-  // ── GET /indoor-patient/by-admission-id/:admissionId ────────────────────────
-  fastify.get(
-    "/indoor-patient/by-admission-id/:admissionId",
-    {
-      schema: {
-        tags: ["IndoorPatients"],
-        summary: "Get indoor patient by human-readable admission ID — for report lookup",
-        params: {
-          type: "object",
-          required: ["admissionId"],
-          properties: {
-            admissionId: {
-              type: "string",
-              pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
-              minLength: 7,
-              maxLength: 7,
-            },
-          },
-        },
-      },
-    },
-    async (req, reply) => {
-      try {
-        const patient = await col().findOne(
-          { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
-          {
-            projection: {
-              admissionId: 1,
-              status: 1,
-              patient: 1,
-              reports: 1,
-            },
-          },
-        );
-        if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
-        return reply.send(patient);
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch indoor patient" });
-      }
-    },
-  );
 
   // ── POST /indoor-patient/admit ───────────────────────────────────────────────
   fastify.post("/indoor-patient/admit", admitPatientSchema, async (req, reply) => {
@@ -654,9 +489,8 @@ async function indoorPatientRoutes(fastify) {
         wardHistory: [],
         expenses: [],
         reports: [],
-        bedCharges: [],
-        waivers: [],
         payments: [],
+        discounts: [],
         admittedAt,
         admittedBy: by(req),
         releasedAt: null,
@@ -724,13 +558,15 @@ async function indoorPatientRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
 
-      const admission = await col().findOne({ _id, labId: labId(req) });
+      const admission = await col().findOne(
+        { _id, labId: labId(req) },
+        { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
+      );
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
       if (admission.status !== "admitted") return reply.code(400).send({ error: "Patient is not currently admitted" });
 
       const { spaceId, bedNumber, note } = req.body;
 
-      // Guard: prevent "transferring" to the cabin the patient is already in
       if (admission.space?.spaceId?.toString() === toObjectId(spaceId)?.toString())
         return reply.code(400).send({ error: "Patient is already admitted in this cabin" });
 
@@ -829,10 +665,9 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { doctorId, note } = req.body;
 
-      const admission = await col().findOne({ _id, labId: labId(req) });
+      const admission = await col().findOne({ _id, labId: labId(req) }, { projection: { supervisorDoctor: 1 } });
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
 
-      // Guard: prevent "changing" to the doctor already supervising this patient
       if (admission.supervisorDoctor?.doctorId?.toString() === toObjectId(doctorId)?.toString())
         return reply.code(400).send({ error: "Patient is already under this doctor" });
 
@@ -896,9 +731,6 @@ async function indoorPatientRoutes(fastify) {
         $set: { updated: { at: addedAt, by: addedBy } },
       };
 
-      // Every test gets a reports[] entry for full visibility.
-      // schemaId present  → online test: full report tracking shape.
-      // schemaId absent   → offline test: lightweight tracking only.
       if (type === "test" && resolvedItemId) {
         update.$push.reports = schemaId
           ? {
@@ -927,6 +759,115 @@ async function indoorPatientRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to add expense" });
+    }
+  });
+
+  // ── POST /indoor-patient/:id/discount ────────────────────────────────────────
+  fastify.post("/indoor-patient/:id/discount", addDiscountSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+      const { category, amount, providedBy, note } = req.body;
+
+      const admission = await col().findOne(
+        { _id, labId: labId(req) },
+        {
+          projection: {
+            dealType: 1,
+            expenses: 1,
+            discounts: 1,
+            admittedAt: 1,
+            releasedAt: 1,
+            space: 1,
+            wardHistory: 1,
+            packageDeal: 1,
+          },
+        },
+      );
+      if (!admission) return reply.code(404).send({ error: "Patient not found" });
+
+      const expenses = admission.expenses ?? [];
+
+      let categoryTotal = 0;
+
+      if (category === "grand-total") {
+        const expenseTotal = expenses.reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
+
+        let bedTotal = 0;
+        if (admission.dealType === "regular") {
+          const tsBst = (ts) => new Date(ts + 6 * 3600 * 1000).toISOString().slice(0, 10);
+          const startStr = tsBst(admission.admittedAt);
+          const endStr = admission.releasedAt ? tsBst(admission.releasedAt) : tsBst(Date.now());
+          const startD = new Date(startStr + "T00:00:00Z");
+          const endD = new Date(endStr + "T00:00:00Z");
+          const cur = new Date(startD);
+          while (cur <= endD) {
+            const d = cur.toISOString().slice(0, 10);
+            let daily = admission.space.chargePerDay;
+            for (const h of admission.wardHistory ?? []) {
+              if (!h.fromDate || !h.toDate) continue;
+              const from = tsBst(h.fromDate);
+              const to = tsBst(h.toDate);
+              if (d >= from && d < to) {
+                daily = h.chargePerDay ?? admission.space.chargePerDay;
+                break;
+              }
+            }
+            bedTotal += daily;
+            cur.setUTCDate(cur.getUTCDate() + 1);
+          }
+        }
+
+        const packageTotal = admission.dealType === "package" ? (admission.packageDeal?.totalAmount ?? 0) : 0;
+        categoryTotal = admission.dealType === "package" ? packageTotal : expenseTotal + bedTotal;
+      } else if (category === "bed-charge") {
+        categoryTotal = Infinity;
+      } else {
+        const typeMap = {
+          test: ["test"],
+          medicine: ["medicine"],
+          product: ["product"],
+          other: ["service", "other"],
+        };
+        const matchTypes = typeMap[category] ?? [category];
+        categoryTotal = expenses
+          .filter((e) => matchTypes.includes(e.type))
+          .reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
+      }
+
+      const existingDiscount = (admission.discounts ?? [])
+        .filter((d) => d.category === category)
+        .reduce((s, d) => s + d.amount, 0);
+
+      if (categoryTotal !== Infinity && existingDiscount + amount > categoryTotal) {
+        return reply.code(400).send({
+          error: `Total discount for "${category}" (${existingDiscount + amount}) exceeds category total (${categoryTotal})`,
+        });
+      }
+
+      const appliedAt = Date.now();
+      const result = await col().updateOne(
+        { _id, labId: labId(req) },
+        {
+          $push: {
+            discounts: {
+              category,
+              amount,
+              providedBy,
+              note: note ?? "",
+              appliedAt,
+              appliedBy: by(req),
+            },
+          },
+          $set: { updated: { at: appliedAt, by: by(req) } },
+        },
+      );
+
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+      return reply.code(201).send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to apply discount" });
     }
   });
 
@@ -960,7 +901,10 @@ async function indoorPatientRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
 
-      const admission = await col().findOne({ _id, labId: labId(req) });
+      const admission = await col().findOne(
+        { _id, labId: labId(req) },
+        { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
+      );
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
       if (admission.status !== "admitted") return reply.code(400).send({ error: "Patient is already released" });
 

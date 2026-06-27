@@ -26,9 +26,12 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      const reportIndex = (admission.reports ?? []).findIndex((r) => r.testId?.toString() === testId.toString());
+      // Find the first INCOMPLETE entry for this testId (there may be duplicates)
+      const reportIndex = (admission.reports ?? []).findIndex(
+        (r) => r.testId?.toString() === testId.toString() && !r.isCompleted,
+      );
       if (reportIndex === -1) {
-        return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
+        return reply.code(404).send({ error: "No pending report entry found for this test on this admission" });
       }
 
       const reportEntry = admission.reports[reportIndex];
@@ -36,10 +39,6 @@ async function indoorReportRoutes(fastify) {
       // Offline tests have no schemaId — nothing to submit
       if (!reportEntry.schemaId) {
         return reply.code(400).send({ error: "This test is offline and does not support report upload" });
-      }
-
-      if (reportEntry.isCompleted) {
-        return reply.code(400).send({ error: "Report already submitted for this test. Use update instead." });
       }
 
       // Preserve any dates that were set before the report was uploaded
@@ -91,9 +90,12 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      const reportIndex = (admission.reports ?? []).findIndex((r) => r.testId?.toString() === testId.toString());
+      // Find the first COMPLETED entry for this testId (update targets an existing submission)
+      const reportIndex = (admission.reports ?? []).findIndex(
+        (r) => r.testId?.toString() === testId.toString() && r.isCompleted,
+      );
       if (reportIndex === -1) {
-        return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
+        return reply.code(404).send({ error: "No completed report entry found for this test on this admission" });
       }
 
       const reportEntry = admission.reports[reportIndex];
@@ -156,9 +158,12 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      const reportIndex = (admission.reports ?? []).findIndex((r) => r.testId?.toString() === testId.toString());
+      // Find the first COMPLETED entry for this testId (dates are set on submitted reports)
+      const reportIndex = (admission.reports ?? []).findIndex(
+        (r) => r.testId?.toString() === testId.toString() && r.isCompleted,
+      );
       if (reportIndex === -1) {
-        return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
+        return reply.code(404).send({ error: "No completed report entry found for this test on this admission" });
       }
 
       if (!admission.reports[reportIndex].schemaId) {
@@ -196,7 +201,11 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      const reportEntry = (admission.reports ?? []).find((r) => r.testId?.toString() === testId.toString());
+      // Prefer the first completed entry; fall back to first incomplete if none completed
+      const reports = admission.reports ?? [];
+      const matchingReports = reports.filter((r) => r.testId?.toString() === testId.toString());
+      const reportEntry = matchingReports.find((r) => r.isCompleted) ?? matchingReports[0];
+
       if (!reportEntry) {
         return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
       }
