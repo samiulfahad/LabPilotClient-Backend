@@ -11,6 +11,7 @@ async function indoorReportRoutes(fastify) {
   // ============================================================================
   // POST /indoor-report/add
   // Body: { report, patientId, testId }
+  // Uses first incomplete entry — no addedAt needed for add
   // ============================================================================
   fastify.post("/indoor-report/add", async (req, reply) => {
     try {
@@ -26,7 +27,7 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Find the first INCOMPLETE entry for this testId (there may be duplicates)
+      // Find the first INCOMPLETE entry for this testId
       const reportIndex = (admission.reports ?? []).findIndex(
         (r) => r.testId?.toString() === testId.toString() && !r.isCompleted,
       );
@@ -36,12 +37,10 @@ async function indoorReportRoutes(fastify) {
 
       const reportEntry = admission.reports[reportIndex];
 
-      // Offline tests have no schemaId — nothing to submit
       if (!reportEntry.schemaId) {
         return reply.code(400).send({ error: "This test is offline and does not support report upload" });
       }
 
-      // Preserve any dates that were set before the report was uploaded
       const existingReport = reportEntry.report ?? {};
       const reportWithDates = {
         ...report,
@@ -74,14 +73,15 @@ async function indoorReportRoutes(fastify) {
 
   // ============================================================================
   // PUT /indoor-report/update
-  // Body: { report, patientId, testId }
+  // Body: { report, patientId, testId, addedAt }
+  // addedAt disambiguates when the same test appears multiple times
   // ============================================================================
   fastify.put("/indoor-report/update", async (req, reply) => {
     try {
-      const { report, patientId, testId } = req.body;
+      const { report, patientId, testId, addedAt } = req.body;
 
-      if (!report || !patientId || !testId) {
-        return reply.code(400).send({ error: "report, patientId and testId are required" });
+      if (!report || !patientId || !testId || !addedAt) {
+        return reply.code(400).send({ error: "report, patientId, testId and addedAt are required" });
       }
 
       const _id = toObjectId(patientId);
@@ -90,12 +90,17 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Find the first COMPLETED entry for this testId (update targets an existing submission)
+      // console.log("update body:", JSON.stringify({ testId, addedAt, addedAtType: typeof addedAt }));
+      // console.log(
+      //   "reports addedAts:",
+      //   admission.reports.map((r) => ({ addedAt: r.addedAt, type: typeof r.addedAt })),
+      // );
+      // Match by testId + addedAt for precise targeting
       const reportIndex = (admission.reports ?? []).findIndex(
-        (r) => r.testId?.toString() === testId.toString() && r.isCompleted,
+        (r) => r.testId?.toString() === testId.toString() && r.addedAt === Number(addedAt),
       );
       if (reportIndex === -1) {
-        return reply.code(404).send({ error: "No completed report entry found for this test on this admission" });
+        return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
       }
 
       const reportEntry = admission.reports[reportIndex];
@@ -104,7 +109,6 @@ async function indoorReportRoutes(fastify) {
         return reply.code(400).send({ error: "This test is offline and does not support report upload" });
       }
 
-      // Preserve existing dates when overwriting report content
       const existingReport = reportEntry.report ?? {};
       const reportWithDates = {
         ...report,
@@ -137,15 +141,14 @@ async function indoorReportRoutes(fastify) {
 
   // ============================================================================
   // PUT /indoor-report/dates
-  // Body: { patientId, testId, sampleCollectionDate?, reportDate? }
-  // Only meaningful for online tests
+  // Body: { patientId, testId, addedAt, sampleCollectionDate?, reportDate? }
   // ============================================================================
   fastify.put("/indoor-report/dates", async (req, reply) => {
     try {
-      const { patientId, testId, sampleCollectionDate, reportDate } = req.body;
+      const { patientId, testId, addedAt, sampleCollectionDate, reportDate } = req.body;
 
-      if (!patientId || !testId) {
-        return reply.code(400).send({ error: "patientId and testId are required" });
+      if (!patientId || !testId || !addedAt) {
+        return reply.code(400).send({ error: "patientId, testId and addedAt are required" });
       }
 
       if (sampleCollectionDate === undefined && reportDate === undefined) {
@@ -158,12 +161,12 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Find the first COMPLETED entry for this testId (dates are set on submitted reports)
+      // Match by testId + addedAt for precise targeting
       const reportIndex = (admission.reports ?? []).findIndex(
-        (r) => r.testId?.toString() === testId.toString() && r.isCompleted,
+        (r) => r.testId?.toString() === testId.toString() && r.addedAt === Number(addedAt),
       );
       if (reportIndex === -1) {
-        return reply.code(404).send({ error: "No completed report entry found for this test on this admission" });
+        return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
       }
 
       if (!admission.reports[reportIndex].schemaId) {
@@ -189,11 +192,13 @@ async function indoorReportRoutes(fastify) {
   });
 
   // ============================================================================
-  // GET /indoor-report/:patientId/:testId
+  // GET /indoor-report/:patientId/:testId?addedAt=
+  // addedAt query param selects a specific entry when duplicates exist
   // ============================================================================
   fastify.get("/indoor-report/:patientId/:testId", async (req, reply) => {
     try {
       const { patientId, testId } = req.params;
+      const { addedAt } = req.query;
 
       const _id = toObjectId(patientId);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
@@ -201,10 +206,13 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Prefer the first completed entry; fall back to first incomplete if none completed
       const reports = admission.reports ?? [];
-      const matchingReports = reports.filter((r) => r.testId?.toString() === testId.toString());
-      const reportEntry = matchingReports.find((r) => r.isCompleted) ?? matchingReports[0];
+      const matches = reports.filter((r) => r.testId?.toString() === testId.toString());
+
+      // If addedAt provided, target that exact entry; otherwise prefer completed, fallback to first
+      const reportEntry = addedAt
+        ? matches.find((r) => r.addedAt === Number(addedAt))
+        : (matches.find((r) => r.isCompleted) ?? matches[0]);
 
       if (!reportEntry) {
         return reply.code(404).send({ error: "Report entry not found for this test on this admission" });
@@ -214,7 +222,7 @@ async function indoorReportRoutes(fastify) {
         testId: reportEntry.testId,
         testName: reportEntry.name,
         schemaId: reportEntry.schemaId,
-        // schemaId null means offline — report/isCompleted fields won't exist on the doc
+        addedAt: reportEntry.addedAt,
         ...(reportEntry.schemaId && {
           report: reportEntry.report,
           isCompleted: reportEntry.isCompleted,
@@ -226,7 +234,6 @@ async function indoorReportRoutes(fastify) {
         patient: admission.patient,
         referrer: admission.referrer,
         admissionId: admission.admissionId,
-        addedAt: reportEntry.addedAt,
       });
     } catch (error) {
       req.log.error(error);
@@ -236,7 +243,6 @@ async function indoorReportRoutes(fastify) {
 
   // ============================================================================
   // GET /indoor-report/all
-  // Returns only online (schemaId present) completed reports
   // ============================================================================
   fastify.get("/indoor-report/all", async (req, reply) => {
     try {
@@ -244,7 +250,6 @@ async function indoorReportRoutes(fastify) {
         .aggregate([
           { $match: { labId: labId(req), "reports.isCompleted": true } },
           { $unwind: { path: "$reports", includeArrayIndex: "reportIndex" } },
-          // isCompleted only exists on online tests — offline entries won't match
           { $match: { "reports.isCompleted": true } },
           {
             $project: {
@@ -261,6 +266,7 @@ async function indoorReportRoutes(fastify) {
               isCompleted: "$reports.isCompleted",
               completedAt: "$reports.completedAt",
               updatedAt: "$reports.updatedAt",
+              addedAt: "$reports.addedAt",
             },
           },
           { $sort: { completedAt: -1 } },
