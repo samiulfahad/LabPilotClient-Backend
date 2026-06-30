@@ -28,7 +28,8 @@ const salesReportQuerySchema = {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function salesReportRoutes(fastify) {
-  const col = () => fastify.mongo.db.collection("invoices");
+  const invoicesCol = () => fastify.mongo.db.collection("invoices");
+  const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -43,7 +44,8 @@ async function salesReportRoutes(fastify) {
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-      const [result] = await col()
+      // ── Outdoor (existing invoice-based) stats ──────────────────────────────
+      const [outdoorResult] = await invoicesCol()
         .aggregate(
           [
             {
@@ -88,9 +90,61 @@ async function salesReportRoutes(fastify) {
         )
         .toArray();
 
+      // ── Indoor (IPD expense-based) stats ─────────────────────────────────────
+      // Indoor patients store test/product purchases inside the `expenses` array,
+      // each entry carrying its own `addedAt` timestamp — so we unwind+match on that
+      // instead of a top-level createdAt like invoices use.
+      const [indoorResult] = await indoorCol()
+        .aggregate(
+          [
+            { $match: { labId: labId(req) } },
+            { $unwind: "$expenses" },
+            {
+              $match: {
+                "expenses.addedAt": { $gte: startDate, $lte: endDate },
+                "expenses.type": { $in: ["test", "product"] },
+              },
+            },
+            {
+              $facet: {
+                tests: [
+                  { $match: { "expenses.type": "test" } },
+                  {
+                    $group: {
+                      _id: "$expenses.itemId",
+                      name: { $first: "$expenses.name" },
+                      count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                    },
+                  },
+                  { $sort: { count: -1 } },
+                  { $limit: limit },
+                  { $project: { _id: 0, testId: "$_id", name: 1, count: 1 } },
+                ],
+                products: [
+                  { $match: { "expenses.type": "product" } },
+                  {
+                    $group: {
+                      _id: "$expenses.itemId",
+                      name: { $first: "$expenses.name" },
+                      count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                    },
+                  },
+                  { $sort: { count: -1 } },
+                  { $limit: limit },
+                  { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                ],
+              },
+            },
+          ],
+          { allowDiskUse: true },
+        )
+        .toArray();
+
       return reply.send({
-        testCounts: result.tests,
-        productCounts: result.products,
+        testCounts: outdoorResult?.tests ?? [],
+        productCounts: outdoorResult?.products ?? [],
+        indoorTestCounts: indoorResult?.tests ?? [],
+        indoorProductCounts: indoorResult?.products ?? [],
       });
     } catch (err) {
       req.log.error(err);

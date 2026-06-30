@@ -19,15 +19,6 @@ async function authRoutes(fastify) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
-    const payload = {
-      id: staff._id.toString(),
-      name: staff.name,
-      role: staff.role,
-      permissions: staff.permissions,
-      labKey: staff.labKey,
-      labId: staff.labId.toString(),
-    };
-
     const lab = await fastify.mongo.db.collection("labs").findOne(
       { _id: toObjectId(staff.labId) },
       {
@@ -35,12 +26,23 @@ async function authRoutes(fastify) {
           name: 1,
           labKey: 1,
           registrationNumber: 1,
+          type: 1,
           "contact.primary": 1,
           "contact.address": 1,
-          "contact.publicEmail": 1
+          "contact.publicEmail": 1,
         },
       },
     );
+
+    const payload = {
+      id: staff._id.toString(),
+      name: staff.name,
+      role: staff.role,
+      permissions: staff.permissions,
+      labKey: staff.labKey,
+      labId: staff.labId.toString(),
+      type: lab?.type,
+    };
 
     const deviceId = randomUUID();
     const accessToken = await reply.jwtSign(payload);
@@ -195,6 +197,7 @@ async function authRoutes(fastify) {
       permissions: decoded.permissions,
       labKey: decoded.labKey,
       labId: decoded.labId,
+      type: decoded.labType,
     };
 
     // ── Step 2: Confirm the session exists in DB BEFORE signing anything ───
