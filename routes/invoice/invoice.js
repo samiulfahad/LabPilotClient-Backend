@@ -31,6 +31,8 @@ const paginatedResponse = (result, limit, cursorField) => {
 
 // ─── Reusable Schema Definitions ─────────────────────────────────────────────
 
+const PRODUCT_TYPES = ["product", "service", "medicine"];
+
 const patientBodySchema = {
   type: "object",
   required: ["name", "gender", "age", "contactNumber"],
@@ -125,16 +127,21 @@ const addInvoiceSchema = {
           minItems: 0,
           maxItems: 100,
           default: [],
-          description: "List of products/consumables used in this invoice",
+          description: "List of products, services, or medicines used in this invoice",
           items: {
             type: "object",
-            required: ["productId", "name", "price", "quantity"],
+            required: ["productId", "name", "price", "quantity", "type"],
             additionalProperties: false,
             properties: {
               productId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the product" },
               name: { type: "string", minLength: 1, maxLength: 100, description: "Name of the product" },
               price: { type: "number", minimum: 0, maximum: 10000000, description: "Unit price of the product" },
               quantity: { type: "integer", minimum: 1, maximum: 10000, description: "Quantity used" },
+              type: {
+                type: "string",
+                enum: PRODUCT_TYPES,
+                description: "Category of the line item: product, service, or medicine",
+              },
             },
           },
         },
@@ -214,7 +221,7 @@ async function invoiceRoutes(fastify) {
             .toArray(),
           fastify.mongo.db
             .collection("products")
-            .find({ labId: labId(req) }, { projection: { name: 1, type:1, price: 1, hasStock: 1, stock: 1 } })
+            .find({ labId: labId(req) }, { projection: { name: 1, type: 1, price: 1, hasStock: 1, stock: 1 } })
             .sort({ name: 1 })
             .toArray(),
         ]);
@@ -321,6 +328,7 @@ async function invoiceRoutes(fastify) {
           name: p.name,
           price: p.price,
           quantity: p.quantity,
+          type: p.type,
         })),
         amount: {
           initial: amount.initial,

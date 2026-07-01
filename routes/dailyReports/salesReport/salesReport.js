@@ -44,7 +44,10 @@ async function salesReportRoutes(fastify) {
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-      // ── Outdoor (existing invoice-based) stats ──────────────────────────────
+      // ── Outdoor (invoice-based) stats ───────────────────────────────────────
+      // Note: outdoor invoices only carry "tests" and "products" (products can be
+      // product/service/medicine per PRODUCT_TYPES) — split products by type here
+      // so medicine/service show separately, matching the indoor breakdown below.
       const [outdoorResult] = await invoicesCol()
         .aggregate(
           [
@@ -72,6 +75,35 @@ async function salesReportRoutes(fastify) {
                 ],
                 products: [
                   { $unwind: "$products" },
+                  { $match: { "products.type": "product" } },
+                  {
+                    $group: {
+                      _id: "$products.productId",
+                      name: { $first: "$products.name" },
+                      count: { $sum: { $ifNull: ["$products.quantity", 1] } },
+                    },
+                  },
+                  { $sort: { count: -1 } },
+                  { $limit: limit },
+                  { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                ],
+                medicines: [
+                  { $unwind: "$products" },
+                  { $match: { "products.type": "medicine" } },
+                  {
+                    $group: {
+                      _id: "$products.productId",
+                      name: { $first: "$products.name" },
+                      count: { $sum: { $ifNull: ["$products.quantity", 1] } },
+                    },
+                  },
+                  { $sort: { count: -1 } },
+                  { $limit: limit },
+                  { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                ],
+                services: [
+                  { $unwind: "$products" },
+                  { $match: { "products.type": "service" } },
                   {
                     $group: {
                       _id: "$products.productId",
@@ -90,61 +122,95 @@ async function salesReportRoutes(fastify) {
         )
         .toArray();
 
-      // ── Indoor (IPD expense-based) stats ─────────────────────────────────────
-      // Indoor patients store test/product purchases inside the `expenses` array,
-      // each entry carrying its own `addedAt` timestamp — so we unwind+match on that
-      // instead of a top-level createdAt like invoices use.
-      const [indoorResult] = await indoorCol()
-        .aggregate(
-          [
-            { $match: { labId: labId(req) } },
-            { $unwind: "$expenses" },
-            {
-              $match: {
-                "expenses.addedAt": { $gte: startDate, $lte: endDate },
-                "expenses.type": { $in: ["test", "product"] },
+      // ── Indoor (IPD expense-based) stats — hospitals only ───────────────────
+      // expenses.type is one of: "medicine" | "product" | "test" | "service" | "other"
+      let indoorResult = [{ tests: [], products: [], medicines: [], services: [] }];
+
+      if (req.user.type === "hospital") {
+        [indoorResult[0]] = await indoorCol()
+          .aggregate(
+            [
+              { $match: { labId: labId(req) } },
+              { $unwind: "$expenses" },
+              {
+                $match: {
+                  "expenses.addedAt": { $gte: startDate, $lte: endDate },
+                  "expenses.type": { $in: ["test", "product", "medicine", "service", "other"] },
+                },
               },
-            },
-            {
-              $facet: {
-                tests: [
-                  { $match: { "expenses.type": "test" } },
-                  {
-                    $group: {
-                      _id: "$expenses.itemId",
-                      name: { $first: "$expenses.name" },
-                      count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+              {
+                $facet: {
+                  tests: [
+                    { $match: { "expenses.type": "test" } },
+                    {
+                      $group: {
+                        _id: "$expenses.itemId",
+                        name: { $first: "$expenses.name" },
+                        count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                      },
                     },
-                  },
-                  { $sort: { count: -1 } },
-                  { $limit: limit },
-                  { $project: { _id: 0, testId: "$_id", name: 1, count: 1 } },
-                ],
-                products: [
-                  { $match: { "expenses.type": "product" } },
-                  {
-                    $group: {
-                      _id: "$expenses.itemId",
-                      name: { $first: "$expenses.name" },
-                      count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                    { $sort: { count: -1 } },
+                    { $limit: limit },
+                    { $project: { _id: 0, testId: "$_id", name: 1, count: 1 } },
+                  ],
+                  products: [
+                    { $match: { "expenses.type": "product" } },
+                    {
+                      $group: {
+                        _id: "$expenses.itemId",
+                        name: { $first: "$expenses.name" },
+                        count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                      },
                     },
-                  },
-                  { $sort: { count: -1 } },
-                  { $limit: limit },
-                  { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
-                ],
+                    { $sort: { count: -1 } },
+                    { $limit: limit },
+                    { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                  ],
+                  medicines: [
+                    { $match: { "expenses.type": "medicine" } },
+                    {
+                      $group: {
+                        _id: "$expenses.itemId",
+                        name: { $first: "$expenses.name" },
+                        count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                      },
+                    },
+                    { $sort: { count: -1 } },
+                    { $limit: limit },
+                    { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                  ],
+                  // "service" and "other" expense types are grouped together as
+                  // one "services" bucket for reporting purposes.
+                  services: [
+                    { $match: { "expenses.type": { $in: ["service", "other"] } } },
+                    {
+                      $group: {
+                        _id: "$expenses.itemId",
+                        name: { $first: "$expenses.name" },
+                        count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                      },
+                    },
+                    { $sort: { count: -1 } },
+                    { $limit: limit },
+                    { $project: { _id: 0, productId: "$_id", name: 1, count: 1 } },
+                  ],
+                },
               },
-            },
-          ],
-          { allowDiskUse: true },
-        )
-        .toArray();
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray();
+      }
 
       return reply.send({
         testCounts: outdoorResult?.tests ?? [],
         productCounts: outdoorResult?.products ?? [],
-        indoorTestCounts: indoorResult?.tests ?? [],
-        indoorProductCounts: indoorResult?.products ?? [],
+        medicineCounts: outdoorResult?.medicines ?? [],
+        serviceCounts: outdoorResult?.services ?? [],
+        indoorTestCounts: indoorResult[0]?.tests ?? [],
+        indoorProductCounts: indoorResult[0]?.products ?? [],
+        indoorMedicineCounts: indoorResult[0]?.medicines ?? [],
+        indoorServiceCounts: indoorResult[0]?.services ?? [],
       });
     } catch (err) {
       req.log.error(err);

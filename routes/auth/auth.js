@@ -197,7 +197,7 @@ async function authRoutes(fastify) {
       permissions: decoded.permissions,
       labKey: decoded.labKey,
       labId: decoded.labId,
-      type: decoded.labType,
+      type: decoded.type,
     };
 
     // ── Step 2: Confirm the session exists in DB BEFORE signing anything ───
