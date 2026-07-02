@@ -17,6 +17,7 @@ const summaryQuerySchema = {
 
 async function commissionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
+  const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -29,7 +30,8 @@ async function commissionReportRoutes(fastify) {
     if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
     try {
-      const rows = await col()
+      // ── Outdoor: commission + test data per referrer (Referrer Based + Outdoor half of Test Based) ──
+      const outdoorRows = await col()
         .aggregate(
           [
             {
@@ -77,6 +79,75 @@ async function commissionReportRoutes(fastify) {
         )
         .toArray();
 
+      // ── Indoor: test occurrences per supervising/referring doctor — Test Based only ──
+      // No commission/discount concept for indoor here; we only need doctor → test → count.
+      // $filter on expenses BEFORE $unwind keeps the unwind cheap on long admissions.
+      const indoorRows = await indoorCol()
+        .aggregate(
+          [
+            { $match: { labId: labId(req) } },
+            {
+              $project: {
+                _id: 0,
+                referrer: 1,
+                expenses: {
+                  $filter: {
+                    input: { $ifNull: ["$expenses", []] },
+                    as: "e",
+                    cond: {
+                      $and: [
+                        { $eq: ["$$e.type", "test"] },
+                        { $gte: ["$$e.addedAt", startDate] },
+                        { $lte: ["$$e.addedAt", endDate] },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+            { $match: { "expenses.0": { $exists: true } } },
+            { $unwind: "$expenses" },
+            {
+              $group: {
+                _id: {
+                  refKey: { $ifNull: ["$referrer.referrerId", "$referrer.name"] },
+                  testKey: { $ifNull: ["$expenses.itemId", "$expenses.name"] },
+                },
+                refName: { $first: "$referrer.name" },
+                refType: { $first: "$referrer.type" },
+                refId: { $first: "$referrer.referrerId" },
+                testName: { $first: "$expenses.name" },
+                count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+              },
+            },
+          ],
+          { allowDiskUse: true },
+        )
+        .toArray();
+
+      // ── Fold indoor rows into a per-referrer map: key -> { name, type, isRegistered, tests, totalTests } ──
+      const indoorByReferrer = new Map();
+      for (const r of indoorRows) {
+        if (!r.refName) continue; // no referrer/doctor attached to this admission — skip
+        const key = String(r._id.refKey);
+        if (!indoorByReferrer.has(key)) {
+          indoorByReferrer.set(key, {
+            name: r.refName,
+            type: r.refType ?? "unknown",
+            isRegistered: Boolean(r.refId),
+            tests: [],
+            totalTests: 0,
+          });
+        }
+        const entry = indoorByReferrer.get(key);
+        entry.tests.push([r.testName, r.count]);
+        entry.totalTests += r.count;
+      }
+      for (const entry of indoorByReferrer.values()) {
+        entry.tests.sort((a, b) => b[1] - a[1]);
+      }
+
+      // ── Build registered / unregistered lists from outdoor rows, attach indoor tests ──
       const registered = [];
       const unregistered = [];
       let totalCommission = 0,
@@ -85,12 +156,16 @@ async function commissionReportRoutes(fastify) {
         totalNet = 0,
         totalInvoices = 0;
 
-      for (const row of rows) {
+      for (const row of outdoorRows) {
         totalCommission += row.totalCommission;
         totalDiscount += row.totalDiscount;
         totalFinal += row.totalFinal;
         totalNet += row.totalNet;
         totalInvoices += row.totalInvoices;
+
+        const key = String(row._id);
+        const indoorEntry = indoorByReferrer.get(key);
+        indoorByReferrer.delete(key);
 
         const base = {
           totalCommission: row.totalCommission,
@@ -99,6 +174,8 @@ async function commissionReportRoutes(fastify) {
           totalNet: row.totalNet,
           totalInvoices: row.totalInvoices,
           invoices: row.invoices,
+          indoorTests: indoorEntry?.tests ?? [],
+          totalIndoorTests: indoorEntry?.totalTests ?? 0,
         };
 
         if (row.isRegistered) {
@@ -110,6 +187,25 @@ async function commissionReportRoutes(fastify) {
           });
         } else {
           unregistered.push({ referredBy: row.name ?? row._id, ...base });
+        }
+      }
+
+      // ── Doctors who only have indoor test activity (no outdoor invoices this window) ──
+      for (const [key, entry] of indoorByReferrer) {
+        const base = {
+          totalCommission: 0,
+          totalDiscount: 0,
+          totalFinal: 0,
+          totalNet: 0,
+          totalInvoices: 0,
+          invoices: [],
+          indoorTests: entry.tests,
+          totalIndoorTests: entry.totalTests,
+        };
+        if (entry.isRegistered) {
+          registered.push({ referrerId: key, name: entry.name, type: entry.type, ...base });
+        } else {
+          unregistered.push({ referredBy: entry.name, ...base });
         }
       }
 
