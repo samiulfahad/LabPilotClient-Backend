@@ -174,7 +174,7 @@ async function accountRoutes(fastify) {
         {
           $set: {
             phone,
-            updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+            updated: { at: Date.now(), by: { id: myId(req), name: req.user.name } },
           },
         },
       );
@@ -209,7 +209,7 @@ async function accountRoutes(fastify) {
         {
           $set: {
             password: hash,
-            updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+            updated: { at: Date.now(), by: { id: myId(req), name: req.user.name } },
           },
         },
       );
@@ -256,7 +256,7 @@ async function accountRoutes(fastify) {
         {
           $set: {
             email,
-            updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+            updated: { at: Date.now(), by: { id: myId(req), name: req.user.name } },
           },
         },
       );

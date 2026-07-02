@@ -185,7 +185,7 @@ async function doctorRoutes(fastify) {
         departments,
         commissionType,
         commissionValue,
-        created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
 
       return reply.code(201).send({ _id: result.insertedId });
@@ -229,7 +229,7 @@ async function doctorRoutes(fastify) {
         ...(departments !== undefined && { departments }),
         ...(commissionType !== undefined && { commissionType }),
         ...(commissionValue !== undefined && { commissionValue }),
-        updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
       const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: updateData });

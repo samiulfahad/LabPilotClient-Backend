@@ -216,7 +216,7 @@ async function staffRoutes(fastify, options) {
         permissions: normalizePermissions(permissions),
         isActive: isActive ?? true,
         deletion: { status: false, at: null, by: null },
-        created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
 
       const message = `LabPilotPro.com-এ আপনাকে স্বাগতম। আপনার পাসওয়ার্ড ${password} এবং ল্যাব আইডি ${req.user.labKey} , লগইন করার পর পাসওয়ার্ডটি পরিবর্তন করুন`;
@@ -254,7 +254,7 @@ async function staffRoutes(fastify, options) {
         ...(email && { email }),
         ...(permissions && { permissions: normalizePermissions(permissions) }),
         ...(isActive !== undefined && { isActive }),
-        updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
       const result = await collection.updateOne(
@@ -280,7 +280,12 @@ async function staffRoutes(fastify, options) {
 
       const result = await collection.updateOne(
         { _id, labId: labId(req), "deletion.status": { $ne: true } },
-        { $set: { isActive: false, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+        {
+          $set: {
+            isActive: false,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
       return { message: "Staff deactivated successfully", _id: req.params.id };
@@ -298,7 +303,12 @@ async function staffRoutes(fastify, options) {
 
       const result = await collection.updateOne(
         { _id, labId: labId(req), "deletion.status": { $ne: true } },
-        { $set: { isActive: true, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+        {
+          $set: {
+            isActive: true,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
       return { message: "Staff activated successfully", _id: req.params.id };
@@ -321,7 +331,7 @@ async function staffRoutes(fastify, options) {
             deletion: {
               status: true,
               at: Date.now(),
-              by: { id: req.user.id, name: req.user.name },
+              by: { id: toObjectId(req.user.id), name: req.user.name },
             },
           },
         },

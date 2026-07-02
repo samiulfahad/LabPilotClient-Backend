@@ -188,7 +188,7 @@ const releaseBedReservationSchema = {
 async function admissionSpaceRoutes(fastify) {
   const col = () => fastify.mongo.db.collection(COLLECTION);
   const labId = (req) => toObjectId(req.user.labId);
-  const by = (req) => ({ id: req.user.id, name: req.user.name });
+  const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
   const now = () => Date.now();
 
   fastify.addHook("onRequest", fastify.authenticate);

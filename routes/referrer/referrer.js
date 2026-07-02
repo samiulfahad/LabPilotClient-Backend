@@ -157,7 +157,7 @@ async function referrerRoutes(fastify, options) {
         commissionType,
         commissionValue,
         isActive: isActive ?? true,
-        created: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
       return reply.code(201).send({ _id: result.insertedId });
     } catch (err) {
@@ -187,7 +187,7 @@ async function referrerRoutes(fastify, options) {
         ...(commissionType !== undefined && { commissionType }),
         ...(commissionValue !== undefined && { commissionValue }),
         ...(isActive !== undefined && { isActive }),
-        updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } },
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
       const result = await collection.updateOne({ _id, labId: labId(req) }, { $set: updateData });
@@ -208,7 +208,12 @@ async function referrerRoutes(fastify, options) {
 
       const result = await collection.updateOne(
         { _id, labId: labId(req) },
-        { $set: { isActive: false, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+        {
+          $set: {
+            isActive: false,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
       return { message: "Referrer deactivated successfully", _id: req.params.id };
@@ -226,7 +231,12 @@ async function referrerRoutes(fastify, options) {
 
       const result = await collection.updateOne(
         { _id, labId: labId(req) },
-        { $set: { isActive: true, updated: { at: Date.now(), by: { id: req.user.id, name: req.user.name } } } },
+        {
+          $set: {
+            isActive: true,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
       return { message: "Referrer activated successfully", _id: req.params.id };

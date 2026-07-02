@@ -1,8 +1,8 @@
-import { ObjectId } from "mongodb";
+import toObjectId from "../../utils/db.js";
 
 async function outdoorReportRoutes(fastify, options) {
   const invoicesCollection = () => fastify.mongo.db.collection("invoices");
-  const labId = (req) => new ObjectId(req.user.labId);
+  const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
 
