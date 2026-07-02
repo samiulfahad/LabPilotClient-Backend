@@ -239,7 +239,7 @@ const releasePatientSchema = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const now = () => Date.now();
-const by = (req) => ({ id: req.user.id, name: req.user.name });
+const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
 
 const generateAdmissionId = async (col, labId) => {
   const DIGIT_CHARS = "123456789";
@@ -351,47 +351,47 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── GET /indoor-patient/by-admission-id/:admissionId ────────────────────────
-fastify.get(
-  "/indoor-patient/by-admission-id/:admissionId",
-  {
-    schema: {
-      tags: ["IndoorPatients"],
-      summary: "Get indoor patient by human-readable admission ID",
-      params: {
-        type: "object",
-        required: ["admissionId"],
-        properties: {
-          admissionId: {
-            type: "string",
-            pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
-            minLength: 7,
-            maxLength: 7,
+  fastify.get(
+    "/indoor-patient/by-admission-id/:admissionId",
+    {
+      schema: {
+        tags: ["IndoorPatients"],
+        summary: "Get indoor patient by human-readable admission ID",
+        params: {
+          type: "object",
+          required: ["admissionId"],
+          properties: {
+            admissionId: {
+              type: "string",
+              pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
+              minLength: 7,
+              maxLength: 7,
+            },
           },
         },
       },
     },
-  },
-  async (req, reply) => {
-    try {
-      const patient = await col().findOne(
-        { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
-        {
-          projection: {
-            admissionId: 1,
-            status: 1,
-            patient: 1,
-            reports: 1,
+    async (req, reply) => {
+      try {
+        const patient = await col().findOne(
+          { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
+          {
+            projection: {
+              admissionId: 1,
+              status: 1,
+              patient: 1,
+              reports: 1,
+            },
           },
-        },
-      );
-      if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
-      return reply.send(patient);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch indoor patient" });
-    }
-  },
-);
+        );
+        if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
+        return reply.send(patient);
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to fetch indoor patient" });
+      }
+    },
+  );
 
   // ── GET /indoor-patient/:id ──────────────────────────────────────────────────
   fastify.get("/indoor-patient/:id", getPatientSchema, async (req, reply) => {

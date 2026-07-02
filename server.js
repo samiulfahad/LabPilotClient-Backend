@@ -17,6 +17,7 @@ import staffRoutes from "./routes/staff/staff.js";
 import testRoutes from "./routes/test/test.js";
 import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
+import myActivityRoutes from "./routes/myActivity/myActivity.js";
 
 // Outdoor Report
 import outdoorReportRoutes from "./routes/report/outdoorReports.js";
@@ -122,6 +123,7 @@ fastify.register(staffRoutes, { prefix: API });
 fastify.register(testRoutes, { prefix: API });
 fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
+fastify.register(myActivityRoutes, { prefix: API });
 
 // Outdoor Reports
 fastify.register(outdoorReportRoutes, { prefix: API });
