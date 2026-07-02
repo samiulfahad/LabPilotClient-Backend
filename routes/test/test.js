@@ -290,7 +290,7 @@ async function testRoutes(fastify) {
       const update = {};
       if (price !== undefined) update.price = price;
       if (schemaId !== undefined) update.schemaId = schemaId ? toObjectId(schemaId) : null;
-      update.updated = { at: Date.now(), by: { id: req.user.id, name: req.user.name } };
+      update.updated = { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } };
 
       const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Test not found" });
