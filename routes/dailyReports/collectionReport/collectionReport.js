@@ -28,8 +28,6 @@ async function collectionReportRoutes(fastify) {
 
     if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-    const isStaff = req.user.role === "staff";
-    const userId = toObjectId(req.user.id); // logged-in staff's id
     const isHospital = req.user.type === "hospital"; // diagnosticCenter labs have no IPD data
 
     try {
@@ -46,8 +44,6 @@ async function collectionReportRoutes(fastify) {
         {
           $match: {
             "collections.at": { $gte: startDate, $lte: endDate },
-            // ✅ If staff, only collections made by them
-            ...(isStaff && { "collections.by.id": userId }),
           },
         },
         {
@@ -90,8 +86,6 @@ async function collectionReportRoutes(fastify) {
         {
           $match: {
             "payments.collectedAt": { $gte: startDate, $lte: endDate },
-            // ✅ If staff, only payments collected by them
-            ...(isStaff && { "payments.collectedBy.id": userId }),
           },
         },
         {
