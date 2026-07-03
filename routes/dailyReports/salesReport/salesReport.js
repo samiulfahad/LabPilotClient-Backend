@@ -47,6 +47,7 @@ async function salesReportRoutes(fastify) {
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const expensesCol = () => fastify.mongo.db.collection("expenses");
   const labId = (req) => toObjectId(req.user.labId);
+  const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
   fastify.addHook("onRequest", fastify.authenticate);
   fastify.addHook("onRequest", fastify.authorize("cashmemo"));
@@ -140,9 +141,11 @@ async function salesReportRoutes(fastify) {
 
       // ── Indoor (IPD expense-based) stats — hospitals only ───────────────────
       // expenses.type is one of: "medicine" | "product" | "test" | "service" | "other"
+      // diagnosticCenter labs have no IPD module — skip this aggregation entirely
+      // rather than querying indoorPatients for a collection that's always empty.
       let indoorResult = [{ tests: [], products: [], medicines: [], services: [] }];
 
-      if (req.user.type === "hospital") {
+      if (isHospital(req)) {
         [indoorResult[0]] = await indoorCol()
           .aggregate(
             [
@@ -238,6 +241,7 @@ async function salesReportRoutes(fastify) {
   // Grouped totals per expense type for a date range — powers the Expense tab.
   // NOTE: lives here (not routes/expense.js) so it shares this file's
   // "cashmemo" authorization instead of expense.js's create/edit/delete guards.
+  // Applies to both lab types (operational expense isn't gated by IPD).
   fastify.get("/expense/summary", expenseSummaryQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);

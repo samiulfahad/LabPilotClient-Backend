@@ -1,4 +1,5 @@
 import toObjectId from "../../../utils/db.js";
+import { computeTotalBilled, computeTotalDiscounts, computeTotalPayments } from "../../../utils/ipdBilling.js";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,8 @@ const summaryQuerySchema = {
 const ipdSummaryQuerySchema = {
   schema: {
     tags: ["Cashmemo"],
-    summary: "Get IPD cash memo summary for a date range — activity-based (expenses/discounts/payments added in range)",
+    summary:
+      "Get IPD revenue-cycle summary for a date range — census, ALOS, billed/collected/due, collection rate, revenue by category, discounts",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
@@ -77,6 +79,13 @@ const ipdReleasedPatientsQuerySchema = {
   },
 };
 
+const ipdOutstandingPatientsSchema = {
+  schema: {
+    tags: ["Cashmemo"],
+    summary: "Get currently admitted patients with outstanding dues (AR), sorted highest due first",
+  },
+};
+
 const expenseSummaryQuerySchema = {
   schema: {
     tags: ["Cashmemo"],
@@ -99,6 +108,7 @@ async function cashmemoRoutes(fastify) {
   const ipdCol = () => fastify.mongo.db.collection("indoorPatients");
   const expenseCol = () => fastify.mongo.db.collection("expenses");
   const labId = (req) => toObjectId(req.user.labId);
+  const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
   fastify.addHook("onRequest", fastify.authenticate);
   fastify.addHook("onRequest", fastify.authorize("cashmemo"));
@@ -200,17 +210,25 @@ async function cashmemoRoutes(fastify) {
 
   // ── GET /cashmemo/ipd-summary ─────────────────────────────────────────────
   //
-  // Activity-based IPD summary: shows what happened *within* the date range,
-  // not which patients were admitted in the range.
+  // Revenue-cycle view for IPD, built around the metrics an actual hospital
+  // finance dashboard tracks: current census, patient flow (admissions/
+  // discharges), average length of stay, billed vs. collected vs. due,
+  // collection rate, and revenue mix by category.
   //
-  //   expenses  → items whose addedAt     falls in [startDate, endDate]
-  //   discounts → items whose appliedAt   falls in [startDate, endDate]
-  //   payments  → items whose collectedAt falls in [startDate, endDate]
-  //   admitted/released → patients whose admittedAt/releasedAt falls in [startDate, endDate]
+  //   revenue figures  → activity-based: expenses/discounts/payments whose
+  //                      own timestamp (addedAt/appliedAt/collectedAt) falls
+  //                      in [startDate, endDate]
+  //   admitted/released/ALOS → based on admittedAt/releasedAt in range
+  //   currentlyAdmitted       → real-time census, NOT date-bound
   //
-  // NOTE: totalDue is bill vs. collection only (does NOT subtract discounts) —
-  // discounts are surfaced separately so the UI never derives collected/due
-  // by backing the discount out of the bill.
+  // NOTE: totalBilled reflects itemized expenses only (test/medicine/product/
+  // service/other) — bed charges accrue daily rather than as dated ledger
+  // entries, so they aren't attributable to a specific reporting window with
+  // the current schema. Bed charge shows up in the per-patient outstanding
+  // (AR) endpoint below, where it's computed against "as of now".
+  //
+  // diagnosticCenter labs have no IPD module — short-circuit before ever
+  // touching the indoorPatients collection for them.
   fastify.get("/cashmemo/ipd-summary", ipdSummaryQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
@@ -218,8 +236,26 @@ async function cashmemoRoutes(fastify) {
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-      const [expensesResult, discountsResult, paymentsResult, admissionResult] = await Promise.all([
-        // ── Expenses added in range ──────────────────────────────────────────
+      if (!isHospital(req)) {
+        return reply.send({
+          currentlyAdmitted: 0,
+          admittedCount: 0,
+          releasedCount: 0,
+          avgStayDays: 0,
+          totalBilled: 0,
+          expensePatientCount: 0,
+          categoryBreakdown: { test: 0, medicine: 0, product: 0, other: 0 },
+          totalDiscounts: 0,
+          discountCount: 0,
+          discountPatientCount: 0,
+          totalCollected: 0,
+          totalDue: 0,
+          collectionRate: 0,
+        });
+      }
+
+      const [expensesResult, discountsResult, paymentsResult, flowResult, currentlyAdmitted] = await Promise.all([
+        // ── Expenses added in range — revenue mix by category ──────────────
         ipdCol()
           .aggregate(
             [
@@ -229,24 +265,58 @@ async function cashmemoRoutes(fastify) {
               {
                 $group: {
                   _id: null,
-                  totalExpenses: {
+                  totalBilled: {
                     $sum: {
                       $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }],
                     },
                   },
-                  testCount: { $sum: { $cond: [{ $eq: ["$expenses.type", "test"] }, 1, 0] } },
-                  productCount: { $sum: { $cond: [{ $eq: ["$expenses.type", "product"] }, 1, 0] } },
-                  otherCount: { $sum: { $cond: [{ $not: [{ $in: ["$expenses.type", ["test", "product"]] }] }, 1, 0] } },
+                  testAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "test"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
+                    },
+                  },
+                  medicineAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "medicine"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
+                    },
+                  },
+                  productAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "product"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
+                    },
+                  },
+                  otherAmount: {
+                    $sum: {
+                      $cond: [
+                        { $in: ["$expenses.type", ["service", "other"]] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
+                    },
+                  },
                   expensePatientIds: { $addToSet: "$_id" },
                 },
               },
               {
                 $project: {
                   _id: 0,
-                  totalExpenses: 1,
-                  testCount: 1,
-                  productCount: 1,
-                  otherCount: 1,
+                  totalBilled: 1,
+                  testAmount: 1,
+                  medicineAmount: 1,
+                  productAmount: 1,
+                  otherAmount: 1,
                   expensePatientCount: { $size: "$expensePatientIds" },
                 },
               },
@@ -295,23 +365,15 @@ async function cashmemoRoutes(fastify) {
                   _id: null,
                   totalCollected: { $sum: "$payments.amount" },
                   paymentCount: { $sum: 1 },
-                  paymentPatientIds: { $addToSet: "$_id" },
                 },
               },
-              {
-                $project: {
-                  _id: 0,
-                  totalCollected: 1,
-                  paymentCount: 1,
-                  paymentPatientCount: { $size: "$paymentPatientIds" },
-                },
-              },
+              { $project: { _id: 0, totalCollected: 1, paymentCount: 1 } },
             ],
             { allowDiskUse: true },
           )
           .toArray(),
 
-        // ── Patients admitted / released in range ────────────────────────────
+        // ── Patient flow: admitted / released in range, + ALOS for releases ──
         ipdCol()
           .aggregate(
             [
@@ -319,53 +381,67 @@ async function cashmemoRoutes(fastify) {
               {
                 $facet: {
                   admitted: [{ $match: { admittedAt: { $gte: startDate, $lte: endDate } } }, { $count: "count" }],
-                  released: [{ $match: { releasedAt: { $gte: startDate, $lte: endDate } } }, { $count: "count" }],
+                  released: [
+                    { $match: { releasedAt: { $gte: startDate, $lte: endDate } } },
+                    {
+                      $project: {
+                        stayDays: { $divide: [{ $subtract: ["$releasedAt", "$admittedAt"] }, 1000 * 60 * 60 * 24] },
+                      },
+                    },
+                    { $group: { _id: null, count: { $sum: 1 }, avgStayDays: { $avg: "$stayDays" } } },
+                  ],
                 },
               },
             ],
             { allowDiskUse: true },
           )
           .toArray(),
+
+        // ── Real-time census — not date-bound ─────────────────────────────────
+        ipdCol().countDocuments({ labId: labId(req), status: "admitted" }),
       ]);
 
       const expenses = expensesResult[0] ?? {
-        totalExpenses: 0,
-        testCount: 0,
-        productCount: 0,
-        otherCount: 0,
+        totalBilled: 0,
+        testAmount: 0,
+        medicineAmount: 0,
+        productAmount: 0,
+        otherAmount: 0,
         expensePatientCount: 0,
       };
       const discounts = discountsResult[0] ?? { totalDiscounts: 0, discountCount: 0, discountPatientCount: 0 };
-      const payments = paymentsResult[0] ?? {
-        totalCollected: 0,
-        paymentCount: 0,
-        paymentPatientCount: 0,
-      };
-      const admittedCount = admissionResult[0]?.admitted?.[0]?.count ?? 0;
-      const releasedCount = admissionResult[0]?.released?.[0]?.count ?? 0;
+      const payments = paymentsResult[0] ?? { totalCollected: 0, paymentCount: 0 };
+      const admittedCount = flowResult[0]?.admitted?.[0]?.count ?? 0;
+      const releasedCount = flowResult[0]?.released?.[0]?.count ?? 0;
+      const avgStayDays = flowResult[0]?.released?.[0]?.avgStayDays ?? 0;
 
-      const totalExpenses = Math.round(expenses.totalExpenses);
+      const totalBilled = Math.round(expenses.totalBilled);
       const totalDiscounts = Math.round(discounts.totalDiscounts);
       const totalCollected = Math.round(payments.totalCollected);
       // Due = bill vs. collection only. Discounts are shown separately and are
       // never backed out of this figure.
-      const totalDue = Math.max(0, totalExpenses - totalCollected);
+      const totalDue = Math.max(0, totalBilled - totalCollected);
+      const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 1000) / 10 : 0;
 
       return reply.send({
+        currentlyAdmitted,
         admittedCount,
         releasedCount,
-        totalExpenses,
-        testCount: expenses.testCount,
-        productCount: expenses.productCount,
-        otherCount: expenses.otherCount,
+        avgStayDays: Math.round(avgStayDays * 10) / 10,
+        totalBilled,
         expensePatientCount: expenses.expensePatientCount,
+        categoryBreakdown: {
+          test: Math.round(expenses.testAmount),
+          medicine: Math.round(expenses.medicineAmount),
+          product: Math.round(expenses.productAmount),
+          other: Math.round(expenses.otherAmount),
+        },
         totalDiscounts,
         discountCount: discounts.discountCount,
         discountPatientCount: discounts.discountPatientCount,
         totalCollected,
-        paymentCount: payments.paymentCount,
-        paymentPatientCount: payments.paymentPatientCount,
         totalDue,
+        collectionRate,
       });
     } catch (err) {
       req.log.error(err);
@@ -376,12 +452,17 @@ async function cashmemoRoutes(fastify) {
   // ── GET /cashmemo/ipd-discount-patients ───────────────────────────────────
   // Patient-level breakdown of discounts applied within the date range, used
   // to drill into the "মোট ডিসকাউন্ট" figure on the indoor cashmemo tab.
+  //
+  // diagnosticCenter labs have no IPD module — return an empty list rather
+  // than querying indoorPatients.
   fastify.get("/cashmemo/ipd-discount-patients", ipdDiscountPatientsQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
       const endDate = parseInt(req.query.endDate);
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+
+      if (!isHospital(req)) return reply.send({ patients: [] });
 
       const patients = await ipdCol()
         .aggregate(
@@ -423,12 +504,17 @@ async function cashmemoRoutes(fastify) {
   // ── GET /cashmemo/ipd-admitted-patients ───────────────────────────────────
   // List of patients whose admittedAt falls within the date range, used to
   // drill into the "নতুন ভর্তি রোগী" count on the indoor cashmemo tab.
+  //
+  // diagnosticCenter labs have no IPD module — return an empty list rather
+  // than querying indoorPatients.
   fastify.get("/cashmemo/ipd-admitted-patients", ipdAdmittedPatientsQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
       const endDate = parseInt(req.query.endDate);
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+
+      if (!isHospital(req)) return reply.send({ patients: [] });
 
       const patients = await ipdCol()
         .find(
@@ -458,12 +544,17 @@ async function cashmemoRoutes(fastify) {
   // ── GET /cashmemo/ipd-released-patients ───────────────────────────────────
   // List of patients whose releasedAt falls within the date range, used to
   // drill into the "ছাড়প্রাপ্ত রোগী" count on the indoor cashmemo tab.
+  //
+  // diagnosticCenter labs have no IPD module — return an empty list rather
+  // than querying indoorPatients.
   fastify.get("/cashmemo/ipd-released-patients", ipdReleasedPatientsQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
       const endDate = parseInt(req.query.endDate);
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+
+      if (!isHospital(req)) return reply.send({ patients: [] });
 
       const patients = await ipdCol()
         .find(
@@ -491,9 +582,69 @@ async function cashmemoRoutes(fastify) {
     }
   });
 
+  // ── GET /cashmemo/ipd-outstanding-patients ────────────────────────────────
+  // Accounts-receivable view: every currently-admitted patient with a
+  // positive outstanding balance (billed − discounts − collected), sorted
+  // highest due first. Not date-range bound — this is "as of right now",
+  // same as any hospital AR aging screen.
+  //
+  // diagnosticCenter labs have no IPD module — return an empty list rather
+  // than querying indoorPatients.
+  fastify.get("/cashmemo/ipd-outstanding-patients", ipdOutstandingPatientsSchema, async (req, reply) => {
+    try {
+      if (!isHospital(req)) return reply.send({ patients: [] });
+
+      const admissions = await ipdCol()
+        .find(
+          { labId: labId(req), status: "admitted" },
+          {
+            projection: {
+              admissionId: 1,
+              patient: 1,
+              space: 1,
+              wardHistory: 1,
+              dealType: 1,
+              packageDeal: 1,
+              expenses: 1,
+              discounts: 1,
+              payments: 1,
+              admittedAt: 1,
+            },
+          },
+        )
+        .toArray();
+
+      const patients = admissions
+        .map((a) => {
+          const billed = computeTotalBilled(a);
+          const discounted = computeTotalDiscounts(a.discounts);
+          const collected = computeTotalPayments(a.payments);
+          const due = Math.max(0, billed - discounted - collected);
+          return {
+            _id: a._id,
+            admissionId: a.admissionId,
+            patientName: a.patient?.name,
+            spaceName: a.space?.spaceName,
+            bedNumber: a.space?.bedNumber,
+            admittedAt: a.admittedAt,
+            billed: Math.round(billed),
+            due: Math.round(due),
+          };
+        })
+        .filter((p) => p.due > 0)
+        .sort((a, b) => b.due - a.due);
+
+      return reply.send({ patients });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch outstanding patients" });
+    }
+  });
+
   // ── GET /cashmemo/expense-summary ─────────────────────────────────────────
   // Total lab operational expense (staffSalary/medicine/testKit/products/others)
   // for a date range — sourced from the `expenses` collection, active only.
+  // Applies to both lab types (operational expense isn't gated by IPD).
   fastify.get("/cashmemo/expense-summary", expenseSummaryQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);

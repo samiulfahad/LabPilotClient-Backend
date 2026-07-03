@@ -19,6 +19,7 @@ async function commissionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const labId = (req) => toObjectId(req.user.labId);
+  const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
   fastify.addHook("onRequest", fastify.authenticate);
 
@@ -82,48 +83,52 @@ async function commissionReportRoutes(fastify) {
       // ── Indoor: test occurrences per supervising/referring doctor — Test Based only ──
       // No commission/discount concept for indoor here; we only need doctor → test → count.
       // $filter on expenses BEFORE $unwind keeps the unwind cheap on long admissions.
-      const indoorRows = await indoorCol()
-        .aggregate(
-          [
-            { $match: { labId: labId(req) } },
-            {
-              $project: {
-                _id: 0,
-                referrer: 1,
-                expenses: {
-                  $filter: {
-                    input: { $ifNull: ["$expenses", []] },
-                    as: "e",
-                    cond: {
-                      $and: [
-                        { $eq: ["$$e.type", "test"] },
-                        { $gte: ["$$e.addedAt", startDate] },
-                        { $lte: ["$$e.addedAt", endDate] },
-                      ],
+      // diagnosticCenter labs have no IPD module — skip this aggregation entirely
+      // rather than querying indoorPatients for a collection that's always empty.
+      const indoorRows = isHospital(req)
+        ? await indoorCol()
+            .aggregate(
+              [
+                { $match: { labId: labId(req) } },
+                {
+                  $project: {
+                    _id: 0,
+                    referrer: 1,
+                    expenses: {
+                      $filter: {
+                        input: { $ifNull: ["$expenses", []] },
+                        as: "e",
+                        cond: {
+                          $and: [
+                            { $eq: ["$$e.type", "test"] },
+                            { $gte: ["$$e.addedAt", startDate] },
+                            { $lte: ["$$e.addedAt", endDate] },
+                          ],
+                        },
+                      },
                     },
                   },
                 },
-              },
-            },
-            { $match: { "expenses.0": { $exists: true } } },
-            { $unwind: "$expenses" },
-            {
-              $group: {
-                _id: {
-                  refKey: { $ifNull: ["$referrer.referrerId", "$referrer.name"] },
-                  testKey: { $ifNull: ["$expenses.itemId", "$expenses.name"] },
+                { $match: { "expenses.0": { $exists: true } } },
+                { $unwind: "$expenses" },
+                {
+                  $group: {
+                    _id: {
+                      refKey: { $ifNull: ["$referrer.referrerId", "$referrer.name"] },
+                      testKey: { $ifNull: ["$expenses.itemId", "$expenses.name"] },
+                    },
+                    refName: { $first: "$referrer.name" },
+                    refType: { $first: "$referrer.type" },
+                    refId: { $first: "$referrer.referrerId" },
+                    testName: { $first: "$expenses.name" },
+                    count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                  },
                 },
-                refName: { $first: "$referrer.name" },
-                refType: { $first: "$referrer.type" },
-                refId: { $first: "$referrer.referrerId" },
-                testName: { $first: "$expenses.name" },
-                count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
-              },
-            },
-          ],
-          { allowDiskUse: true },
-        )
-        .toArray();
+              ],
+              { allowDiskUse: true },
+            )
+            .toArray()
+        : [];
 
       // ── Fold indoor rows into a per-referrer map: key -> { name, type, isRegistered, tests, totalTests } ──
       const indoorByReferrer = new Map();
@@ -191,6 +196,8 @@ async function commissionReportRoutes(fastify) {
       }
 
       // ── Doctors who only have indoor test activity (no outdoor invoices this window) ──
+      // Only ever populated for hospital-type labs, since indoorByReferrer stays
+      // empty for diagnosticCenter labs (indoorRows was skipped above).
       for (const [key, entry] of indoorByReferrer) {
         const base = {
           totalCommission: 0,
