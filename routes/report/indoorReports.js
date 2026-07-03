@@ -5,6 +5,7 @@ const COLLECTION = "indoorPatients";
 async function indoorReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection(COLLECTION);
   const labId = (req) => toObjectId(req.user.labId);
+  const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
 
   fastify.addHook("onRequest", fastify.authenticate);
 
@@ -59,6 +60,7 @@ async function indoorReportRoutes(fastify) {
             [`reports.${reportIndex}.report`]: reportWithDates,
             [`reports.${reportIndex}.isCompleted`]: true,
             [`reports.${reportIndex}.completedAt`]: Date.now(),
+            [`reports.${reportIndex}.completedBy`]: by(req),
           },
         },
       );
@@ -127,6 +129,7 @@ async function indoorReportRoutes(fastify) {
             [`reports.${reportIndex}.report`]: reportWithDates,
             [`reports.${reportIndex}.isCompleted`]: true,
             [`reports.${reportIndex}.updatedAt`]: Date.now(),
+            [`reports.${reportIndex}.updatedBy`]: by(req),
           },
         },
       );
@@ -227,7 +230,9 @@ async function indoorReportRoutes(fastify) {
           report: reportEntry.report,
           isCompleted: reportEntry.isCompleted,
           completedAt: reportEntry.completedAt ?? null,
+          completedBy: reportEntry.completedBy ?? null,
           updatedAt: reportEntry.updatedAt ?? null,
+          updatedBy: reportEntry.updatedBy ?? null,
           reportDate: reportEntry.report?.reportDate ?? null,
           sampleCollectionDate: reportEntry.report?.sampleCollectionDate ?? null,
         }),
@@ -265,7 +270,9 @@ async function indoorReportRoutes(fastify) {
               report: "$reports.report",
               isCompleted: "$reports.isCompleted",
               completedAt: "$reports.completedAt",
+              completedBy: "$reports.completedBy",
               updatedAt: "$reports.updatedAt",
+              updatedBy: "$reports.updatedBy",
               addedAt: "$reports.addedAt",
             },
           },

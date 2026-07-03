@@ -19,6 +19,9 @@ import productRoutes from "./routes/product/product.js";
 import invoiceRoutes from "./routes/invoice/invoice.js";
 import myActivityRoutes from "./routes/myActivity/myActivity.js";
 
+// Expense
+import expenseRoutes from "./routes/expense/expense.js";
+
 // Outdoor Report
 import outdoorReportRoutes from "./routes/report/outdoorReports.js";
 // Indoor Report
@@ -115,6 +118,9 @@ fastify.register(salesReportRoutes, { prefix: API });
 fastify.register(commissionReportRoutes, { prefix: API });
 fastify.register(collectionReportRoutes, { prefix: API });
 
+// Expense
+fastify.register(expenseRoutes, { prefix: API });
+
 // Referrers
 fastify.register(referrerRoutes, { prefix: API });
 
@@ -129,6 +135,7 @@ fastify.register(myActivityRoutes, { prefix: API });
 fastify.register(outdoorReportRoutes, { prefix: API });
 // Indoor Reports
 fastify.register(indoorReportRoutes, { prefix: API });
+
 
 fastify.register(accountRoutes, { prefix: API });
 fastify.register(billingRoutes, { prefix: API });

@@ -3,6 +3,7 @@ import toObjectId from "../../utils/db.js";
 async function outdoorReportRoutes(fastify, options) {
   const invoicesCollection = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
+  const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
 
   fastify.addHook("onRequest", fastify.authenticate);
 
@@ -52,6 +53,7 @@ async function outdoorReportRoutes(fastify, options) {
             [`tests.${testIndex}.report`]: reportWithDates,
             [`tests.${testIndex}.isCompleted`]: true,
             [`tests.${testIndex}.completedAt`]: Date.now(),
+            [`tests.${testIndex}.completedBy`]: by(req),
           },
         },
       );
@@ -109,6 +111,7 @@ async function outdoorReportRoutes(fastify, options) {
             [`tests.${testIndex}.report`]: reportWithDates,
             [`tests.${testIndex}.isCompleted`]: true,
             [`tests.${testIndex}.updatedAt`]: Date.now(),
+            [`tests.${testIndex}.updatedBy`]: by(req),
           },
         },
       );
@@ -196,7 +199,9 @@ async function outdoorReportRoutes(fastify, options) {
         report: test.report,
         isCompleted: test.isCompleted,
         completedAt: test.completedAt ?? null,
+        completedBy: test.completedBy ?? null,
         updatedAt: test.updatedAt ?? null,
+        updatedBy: test.updatedBy ?? null,
         patient: invoice.patient,
         referrer: invoice.referrer,
         invoiceId: invoice.invoiceId,
@@ -236,7 +241,9 @@ async function outdoorReportRoutes(fastify, options) {
               report: "$tests.report",
               isCompleted: "$tests.isCompleted",
               completedAt: "$tests.completedAt",
+              completedBy: "$tests.completedBy",
               updatedAt: "$tests.updatedAt",
+              updatedBy: "$tests.updatedBy",
             },
           },
           { $sort: { completedAt: -1 } },

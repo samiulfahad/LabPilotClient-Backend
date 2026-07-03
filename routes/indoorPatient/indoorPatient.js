@@ -236,6 +236,20 @@ const releasePatientSchema = {
   },
 };
 
+const updateClinicalNotesSchema = {
+  schema: {
+    tags: ["IndoorPatients"],
+    summary: "Update patient clinical notes (diagnosis/description and medical history)",
+    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
+    body: {
+      type: "object",
+      required: ["disease"],
+      additionalProperties: false,
+      properties: { disease: diseaseSchema },
+    },
+  },
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const now = () => Date.now();
@@ -549,6 +563,34 @@ async function indoorPatientRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to update patient info" });
+    }
+  });
+
+  // ── PATCH /indoor-patient/:id/clinical-notes ─────────────────────────────────
+  fastify.patch("/indoor-patient/:id/clinical-notes", updateClinicalNotesSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+      const { disease } = req.body;
+
+      const updatedAt = now();
+      const result = await col().updateOne(
+        { _id, labId: labId(req) },
+        {
+          $set: {
+            "disease.description": disease.description?.trim() ?? "",
+            "disease.medicalHistory": disease.medicalHistory?.trim() ?? "",
+            "disease.updatedAt": updatedAt,
+            "disease.updatedBy": by(req),
+            updated: { at: updatedAt, by: by(req) },
+          },
+        },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+      return reply.send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update clinical notes" });
     }
   });
 
