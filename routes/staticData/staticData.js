@@ -65,7 +65,7 @@ async function staticDataRoutes(fastify) {
   fastify.get(
     "/departments",
     { schema: { tags: ["Departments"], summary: "Get all available departments" } },
-    async (_req, reply) => reply.send({ departments: ALLOWED_DEPARTMENTS }),
+    async (_req, reply) => reply.send({ departments: ALLOWED_MED_DEPARTMENTS  }),
   );
 
   // ── GET /designations ─────────────────────────────────────────────────────

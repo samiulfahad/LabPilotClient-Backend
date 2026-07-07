@@ -20,6 +20,10 @@ async function collectionReportRoutes(fastify) {
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const labId = (req) => toObjectId(req.user.labId);
 
+  // Excludes soft-deleted indoor patients from every IPD collection figure.
+  // Missing `deletion` field (pre-soft-delete legacy docs) still matches null.
+  const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
+
   fastify.addHook("onRequest", fastify.authenticate);
 
   fastify.get("/collection-report/summary", summaryQuerySchema, async (req, reply) => {
@@ -75,10 +79,12 @@ async function collectionReportRoutes(fastify) {
       // earlier, then filter payments themselves to the requested window.
       // Diagnostic centers have no IPD module at all, so skip this query
       // entirely for them rather than hitting an irrelevant collection.
+      // Soft-deleted admissions are excluded via notDeletedFilter so their
+      // payments never contribute to a collector's totals.
       const indoorCollectionStatsPipeline = [
         {
           $match: {
-            labId: labId(req),
+            ...notDeletedFilter(req),
             admittedAt: { $gte: startDate - 90 * 24 * 60 * 60 * 1000, $lte: endDate },
           },
         },

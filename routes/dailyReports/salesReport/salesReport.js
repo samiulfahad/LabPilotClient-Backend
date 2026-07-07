@@ -49,6 +49,11 @@ async function salesReportRoutes(fastify) {
   const labId = (req) => toObjectId(req.user.labId);
   const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
+  // Excludes soft-deleted indoor patients from every indoor test/product/
+  // medicine/service figure. Missing `deletion` field (pre-soft-delete legacy
+  // docs) still matches null.
+  const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
+
   fastify.addHook("onRequest", fastify.authenticate);
   fastify.addHook("onRequest", fastify.authorize("cashmemo"));
 
@@ -143,13 +148,15 @@ async function salesReportRoutes(fastify) {
       // expenses.type is one of: "medicine" | "product" | "test" | "service" | "other"
       // diagnosticCenter labs have no IPD module — skip this aggregation entirely
       // rather than querying indoorPatients for a collection that's always empty.
+      // Soft-deleted admissions are excluded via notDeletedFilter so their
+      // expenses never contribute to indoor test/product/medicine/service counts.
       let indoorResult = [{ tests: [], products: [], medicines: [], services: [] }];
 
       if (isHospital(req)) {
         [indoorResult[0]] = await indoorCol()
           .aggregate(
             [
-              { $match: { labId: labId(req) } },
+              { $match: notDeletedFilter(req) },
               { $unwind: "$expenses" },
               {
                 $match: {

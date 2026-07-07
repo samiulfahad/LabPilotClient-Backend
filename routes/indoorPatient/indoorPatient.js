@@ -250,10 +250,28 @@ const updateClinicalNotesSchema = {
   },
 };
 
+const softDeletePatientSchema = {
+  schema: {
+    tags: ["IndoorPatients"],
+    summary: "Soft delete an indoor patient record",
+    params: { type: "object", required: ["id"], properties: { id: objectIdSchema } },
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: { note: { type: "string", maxLength: 500 } },
+    },
+  },
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const now = () => Date.now();
 const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
+
+// Every read/write path on this collection must exclude soft-deleted records.
+// Spreading this into a filter alongside `_id` keeps every route consistent
+// and means a single change here updates every query at once.
+const notDeletedFilter = (req) => ({ labId: toObjectId(req.user.labId), "deletion.at": null });
 
 const generateAdmissionId = async (col, labId) => {
   const DIGIT_CHARS = "123456789";
@@ -337,7 +355,7 @@ async function indoorPatientRoutes(fastify) {
       const { status = "admitted", search = "", page = 1, limit = 20 } = req.query;
       const skip = (page - 1) * limit;
 
-      const filter = { labId: labId(req) };
+      const filter = { ...notDeletedFilter(req) };
       if (status !== "all") filter.status = status;
       if (search.trim()) {
         filter.$or = [
@@ -388,7 +406,7 @@ async function indoorPatientRoutes(fastify) {
     async (req, reply) => {
       try {
         const patient = await col().findOne(
-          { admissionId: req.params.admissionId.toUpperCase(), labId: labId(req) },
+          { admissionId: req.params.admissionId.toUpperCase(), ...notDeletedFilter(req) },
           {
             projection: {
               admissionId: 1,
@@ -412,7 +430,7 @@ async function indoorPatientRoutes(fastify) {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const patient = await col().findOne({ _id, labId: labId(req) }, { projection: PATIENT_FULL_PROJECTION });
+      const patient = await col().findOne({ _id, ...notDeletedFilter(req) }, { projection: PATIENT_FULL_PROJECTION });
       if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
       return reply.send(patient);
     } catch (err) {
@@ -510,6 +528,7 @@ async function indoorPatientRoutes(fastify) {
         releasedAt: null,
         releasedBy: null,
         created: { at: admittedAt, by: by(req) },
+        deletion: { at: null, by: null, note: null },
       };
 
       if (space.multiBed) {
@@ -540,7 +559,7 @@ async function indoorPatientRoutes(fastify) {
       const { patient } = req.body;
 
       const result = await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $set: {
             "patient.name": patient.name.trim(),
@@ -575,7 +594,7 @@ async function indoorPatientRoutes(fastify) {
 
       const updatedAt = now();
       const result = await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $set: {
             "disease.description": disease.description?.trim() ?? "",
@@ -601,7 +620,7 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
 
       const admission = await col().findOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
       );
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
@@ -662,7 +681,7 @@ async function indoorPatientRoutes(fastify) {
       }
 
       await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $set: {
             space: {
@@ -707,7 +726,7 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { doctorId, note } = req.body;
 
-      const admission = await col().findOne({ _id, labId: labId(req) }, { projection: { supervisorDoctor: 1 } });
+      const admission = await col().findOne({ _id, ...notDeletedFilter(req) }, { projection: { supervisorDoctor: 1 } });
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
 
       if (admission.supervisorDoctor?.doctorId?.toString() === toObjectId(doctorId)?.toString())
@@ -718,7 +737,7 @@ async function indoorPatientRoutes(fastify) {
 
       const changedAt = now();
       await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $set: {
             supervisorDoctor: { doctorId: toObjectId(doctorId), name: doctor.name, degree: doctor.degree ?? "" },
@@ -795,7 +814,7 @@ async function indoorPatientRoutes(fastify) {
             };
       }
 
-      const result = await col().updateOne({ _id, labId: labId(req) }, update);
+      const result = await col().updateOne({ _id, ...notDeletedFilter(req) }, update);
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
       return reply.code(201).send({ success: true });
     } catch (err) {
@@ -812,7 +831,7 @@ async function indoorPatientRoutes(fastify) {
       const { category, amount, providedBy, note } = req.body;
 
       const admission = await col().findOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           projection: {
             dealType: 1,
@@ -889,7 +908,7 @@ async function indoorPatientRoutes(fastify) {
 
       const appliedAt = Date.now();
       const result = await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $push: {
             discounts: {
@@ -922,7 +941,7 @@ async function indoorPatientRoutes(fastify) {
 
       const collectedAt = now();
       const result = await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $push: { payments: { amount, collectedBy: by(req), collectedAt, note: note ?? "" } },
           $set: { updated: { at: collectedAt, by: by(req) } },
@@ -944,7 +963,7 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
 
       const admission = await col().findOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
       );
       if (!admission) return reply.code(404).send({ error: "Patient not found" });
@@ -969,7 +988,7 @@ async function indoorPatientRoutes(fastify) {
       }
 
       await col().updateOne(
-        { _id, labId: labId(req) },
+        { _id, ...notDeletedFilter(req) },
         {
           $set: {
             status: "released",
@@ -1000,6 +1019,55 @@ async function indoorPatientRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to release patient" });
+    }
+  });
+
+  // ── DELETE /indoor-patient/:id ───────────────────────────────────────────────
+  fastify.delete("/indoor-patient/:id", softDeletePatientSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+
+      const admission = await col().findOne({ _id, ...notDeletedFilter(req) }, { projection: { status: 1, space: 1 } });
+      if (!admission) return reply.code(404).send({ error: "Patient not found" });
+
+      const { note } = req.body ?? {};
+      const deletedAt = now();
+
+      // Free up the space if the patient is still admitted at time of deletion,
+      // mirroring the release-time cleanup so beds/cabins don't stay stuck reserved.
+      if (admission.status === "admitted") {
+        if (admission.space.bedNumber != null) {
+          await spacesCol().updateOne(
+            { _id: admission.space.spaceId, labId: labId(req) },
+            {
+              $pull: { "multiBedConf.booked": admission.space.bedNumber },
+              $set: { updated: { at: deletedAt, by: by(req) } },
+            },
+          );
+        } else {
+          await spacesCol().updateOne(
+            { _id: admission.space.spaceId, labId: labId(req) },
+            { $set: { reserved: false, reservedNote: "", updated: { at: deletedAt, by: by(req) } } },
+          );
+        }
+      }
+
+      const result = await col().updateOne(
+        { _id, ...notDeletedFilter(req) },
+        {
+          $set: {
+            deletion: { at: deletedAt, by: by(req), note: note ?? "" },
+            updated: { at: deletedAt, by: by(req) },
+          },
+        },
+      );
+
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+      return reply.send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to delete patient" });
     }
   });
 }
