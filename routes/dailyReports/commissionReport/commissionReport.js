@@ -27,6 +27,7 @@ async function commissionReportRoutes(fastify) {
   const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("commissionReport"));
 
   // ── GET /commission/summary ───────────────────────────────────────────────
   fastify.get("/commission-report/summary", summaryQuerySchema, async (req, reply) => {

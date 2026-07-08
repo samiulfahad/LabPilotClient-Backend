@@ -105,6 +105,7 @@ async function doctorRoutes(fastify) {
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("manageDoctors"));
 
   // ── GET /doctors ───────────────────────────────────────────────────────────
   fastify.get("/doctors", getAllDoctorsSchema, async (req, reply) => {

@@ -25,6 +25,7 @@ async function collectionReportRoutes(fastify) {
   const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("collectionReport"));
 
   fastify.get("/collection-report/summary", summaryQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);

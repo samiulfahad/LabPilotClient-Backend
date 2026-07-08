@@ -31,6 +31,7 @@ import indoorReportRoutes from "./routes/report/indoorReports.js";
 // Daily Reports
 import cashmemoRoutes from "./routes/dailyReports/cashmemo/cashmemo.js";
 import salesReportRoutes from "./routes/dailyReports/salesReport/salesReport.js";
+import expenseReportRoutes from "./routes/dailyReports/expenseReport/expenseReport.js";
 import commissionReportRoutes from "./routes/dailyReports/commissionReport/commissionReport.js";
 import collectionReportRoutes from "./routes/dailyReports/collectionReport/collectionReport.js";
 
@@ -115,6 +116,7 @@ fastify.register(authRoutes, { prefix: API });
 // Daily Reports
 fastify.register(cashmemoRoutes, { prefix: API });
 fastify.register(salesReportRoutes, { prefix: API });
+fastify.register(expenseReportRoutes, { prefix: API });
 fastify.register(commissionReportRoutes, { prefix: API });
 fastify.register(collectionReportRoutes, { prefix: API });
 

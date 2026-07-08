@@ -325,6 +325,10 @@ async function indoorPatientRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
+  const requireAdmit = { onRequest: [fastify.authorize("admitPatient")] };
+  const requireDelete = { onRequest: [fastify.authorize("deletePatient")] };
+  const requireRelease = { onRequest: [fastify.authorize("releasePatient")] };
+
   // ── GET /indoor-patients/required-data ──────────────────────────────────────
   fastify.get("/indoor-patients/required-data", getRequiredDataSchema, async (req, reply) => {
     try {
@@ -440,7 +444,7 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── POST /indoor-patient/admit ───────────────────────────────────────────────
-  fastify.post("/indoor-patient/admit", admitPatientSchema, async (req, reply) => {
+  fastify.post("/indoor-patient/admit", { ...admitPatientSchema, ...requireAdmit }, async (req, reply) => {
     try {
       const {
         patient,
@@ -957,7 +961,7 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── PATCH /indoor-patient/:id/release ────────────────────────────────────────
-  fastify.patch("/indoor-patient/:id/release", releasePatientSchema, async (req, reply) => {
+  fastify.patch("/indoor-patient/:id/release", { ...releasePatientSchema, ...requireRelease }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
@@ -1023,7 +1027,7 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── DELETE /indoor-patient/:id ───────────────────────────────────────────────
-  fastify.delete("/indoor-patient/:id", softDeletePatientSchema, async (req, reply) => {
+  fastify.delete("/indoor-patient/:id", { ...softDeletePatientSchema, ...requireDelete }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });

@@ -61,6 +61,8 @@ async function productRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
+  const requireManage = { onRequest: [fastify.authorize("manageProducts")] };
+
   // ── GET /products ──────────────────────────────────────────────────────────
   fastify.get(
     "/products",
@@ -135,7 +137,7 @@ async function productRoutes(fastify) {
   // ── POST /products ─────────────────────────────────────────────────────────
   fastify.post(
     "/products",
-    { schema: { tags: ["Products"], summary: "Create a catalog item", body: catalogBodySchema } },
+    { ...requireManage, schema: { tags: ["Products"], summary: "Create a catalog item", body: catalogBodySchema } },
     async (req, reply) => {
       try {
         const { type, name, price, description, hasStock = false, stock = 0, unitType, unitQty } = req.body;
@@ -180,6 +182,7 @@ async function productRoutes(fastify) {
   fastify.patch(
     "/products/:itemId",
     {
+      ...requireManage,
       schema: {
         tags: ["Products"],
         summary: "Update a catalog item",
@@ -256,6 +259,7 @@ async function productRoutes(fastify) {
   fastify.post(
     "/products/:itemId/stock/adjust",
     {
+      ...requireManage,
       schema: {
         tags: ["Products"],
         summary: "Adjust stock by delta",
@@ -305,7 +309,10 @@ async function productRoutes(fastify) {
   // ── DELETE /products/:itemId ───────────────────────────────────────────────
   fastify.delete(
     "/products/:itemId",
-    { schema: { tags: ["Products"], summary: "Delete a catalog item", params: catalogIdParamSchema } },
+    {
+      ...requireManage,
+      schema: { tags: ["Products"], summary: "Delete a catalog item", params: catalogIdParamSchema },
+    },
     async (req, reply) => {
       try {
         const result = await col().deleteOne({ _id: toObjectId(req.params.itemId), labId: labId(req) });

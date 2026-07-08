@@ -111,8 +111,7 @@ async function expenseRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  const requireCreate = { onRequest: [fastify.authorize("createExpense")] };
-  const requireEdit = { onRequest: [fastify.authorize("editExpense")] };
+  const requireCreate = { onRequest: [fastify.authorize("addExpense")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteExpense")] };
 
   // ── POST /expense/add ─────────────────────────────────────────────────────
@@ -162,7 +161,8 @@ async function expenseRoutes(fastify) {
 
   // ── PATCH /expense/:expenseId/edit ────────────────────────────────────────
   // Only description is editable — type and amount are immutable once created.
-  fastify.patch("/expense/:expenseId/edit", { ...editExpenseSchema, ...requireEdit }, async (req, reply) => {
+  // No permission gate: any authenticated staff (or admin) can edit.
+  fastify.patch("/expense/:expenseId/edit", { ...editExpenseSchema }, async (req, reply) => {
     try {
       const { expenseId } = req.params;
       const { description } = req.body;

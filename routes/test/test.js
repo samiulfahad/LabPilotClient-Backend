@@ -169,6 +169,8 @@ async function testRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
+  const requireManage = { onRequest: [fastify.authorize("manageTest")] };
+
   // ── GET /test/all ─────────────────────────────────────────────────────────
   fastify.get("/test/all", getAllTestsSchema, async (req, reply) => {
     try {
@@ -254,7 +256,7 @@ async function testRoutes(fastify) {
   });
 
   // ── POST /test ────────────────────────────────────────────────────────────
-  fastify.post("/test", createTestSchema, async (req, reply) => {
+  fastify.post("/test", { ...createTestSchema, ...requireManage }, async (req, reply) => {
     try {
       const { name, testId, categoryId, schemaId, price } = req.body;
 
@@ -280,7 +282,7 @@ async function testRoutes(fastify) {
   });
 
   // ── PATCH /test/:testId ───────────────────────────────────────────────────
-  fastify.patch("/test/:testId", updateTestSchema, async (req, reply) => {
+  fastify.patch("/test/:testId", { ...updateTestSchema, ...requireManage }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.testId);
       if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
@@ -304,7 +306,7 @@ async function testRoutes(fastify) {
   });
 
   // ── DELETE /test/:testId ──────────────────────────────────────────────────
-  fastify.delete("/test/:testId", deleteTestSchema, async (req, reply) => {
+  fastify.delete("/test/:testId", { ...deleteTestSchema, ...requireManage }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.testId);
       if (!_id) return reply.code(400).send({ error: "Invalid test ID" });

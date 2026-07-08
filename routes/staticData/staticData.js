@@ -48,12 +48,23 @@ export const ALLOWED_DESIGNATIONS = [
 ];
 
 export const ALLOWED_PERMISSIONS = [
-  { key: "createInvoice", label: "ইনভয়েস তৈরি", icon: "FilePlus", color: "#3B82F6" },
-  { key: "editInvoice", label: "ইনভয়েস সম্পাদনা", icon: "FileEdit", color: "#F59E0B" },
-  { key: "deleteInvoice", label: "ইনভয়েস মুছুন", icon: "Trash2", color: "#EF4444" },
-  { key: "cashmemo", label: "ক্যাশমেমো", icon: "FileText", color: "#10B981" },
-  { key: "uploadReport", label: "রিপোর্ট আপলোড", icon: "Upload", color: "#8B5CF6" },
-  { key: "downloadReport", label: "রিপোর্ট ডাউনলোড", icon: "Download", color: "#0D9488" },
+  { key: "createInvoice", label: "ইনভয়েস তৈরি", for: "both" },
+  { key: "deleteInvoice", label: "ইনভয়েস ডিলিট", for: "both" },
+  { key: "addExpense", label: "নতুন খরচ/ব্যয় তৈরি", for: "both" },
+  { key: "deleteExpense", label: "খরচ/ব্যয় ডিলিট", for: "both" },
+  { key: "cashmemo", label: "ক্যাশমেমু", for: "both" },
+  { key: "salesReport", label: "সেলস রিপোর্ট", for: "both" },
+  { key: "expenseReport", label: "এক্সপেন্স (খরচ/ব্যয়) রিপোর্ট", for: "both" },
+  { key: "commissionReport", label: "কমিশন রিপোর্ট", for: "both" },
+  { key: "collectionReport", label: "কালেকশন রিপোর্র", for: "both" },
+  { key: "medicalReport", label: "মেডিকেল রিপোর্ট", for: "both" },
+  { key: "manageProducts", label: "পণ্য, ঔষধ, সেবা এবং মূল্য তালিকা ম্যানেজমেন্ট", for: "both" },
+  { key: "manageReferrers", label: "রেফারার ম্যানেজমেন্ট", for: "both" },
+  { key: "manageDoctors", label: "ডাক্তার ম্যানেজমেন্ট", for: "both" },
+  { key: "manageTest", label: "টেস্ট এবং মূল্যতালিকা ম্যানেজমেন্ট", for: "both" },
+  { key: "admitPatient", label: "নতুন রোগী ভর্তি", for: "hospitalOnly" },
+  { key: "deletePatient", label: "ভর্তি রোগীর তথ্য ডিলিট", for: "hospitalOnly" },
+  { key: "releasePatient", label: "ভর্তি রোগী রিলিজ দেওয়া", for: "hospitalOnly" },
 ];
 
 export const ALLOWED_DEPARTMENTS = new Set(ALLOWED_MED_DEPARTMENTS.map((d) => d.value));
@@ -65,7 +76,7 @@ async function staticDataRoutes(fastify) {
   fastify.get(
     "/departments",
     { schema: { tags: ["Departments"], summary: "Get all available departments" } },
-    async (_req, reply) => reply.send({ departments: ALLOWED_MED_DEPARTMENTS  }),
+    async (_req, reply) => reply.send({ departments: ALLOWED_MED_DEPARTMENTS }),
   );
 
   // ── GET /designations ─────────────────────────────────────────────────────

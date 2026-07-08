@@ -25,27 +25,11 @@ const salesReportQuerySchema = {
   },
 };
 
-const expenseSummaryQuerySchema = {
-  schema: {
-    tags: ["Test Stats"],
-    summary: "Get expense totals grouped by type for a date range",
-    querystring: {
-      type: "object",
-      required: ["startDate", "endDate"],
-      properties: {
-        startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
-        endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
-      },
-    },
-  },
-};
-
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function salesReportRoutes(fastify) {
   const invoicesCol = () => fastify.mongo.db.collection("invoices");
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
-  const expensesCol = () => fastify.mongo.db.collection("expenses");
   const labId = (req) => toObjectId(req.user.labId);
   const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
@@ -55,7 +39,7 @@ async function salesReportRoutes(fastify) {
   const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
 
   fastify.addHook("onRequest", fastify.authenticate);
-  fastify.addHook("onRequest", fastify.authorize("cashmemo"));
+  fastify.addHook("onRequest", fastify.authorize("salesReport"));
 
   // ── GET /test-stats/summary ─────────────────────────────────────────────────
   fastify.get("/test-stats/summary", salesReportQuerySchema, async (req, reply) => {
@@ -241,55 +225,6 @@ async function salesReportRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch test stats" });
-    }
-  });
-
-  // ── GET /expense/summary ────────────────────────────────────────────────────
-  // Grouped totals per expense type for a date range — powers the Expense tab.
-  // NOTE: lives here (not routes/expense.js) so it shares this file's
-  // "cashmemo" authorization instead of expense.js's create/edit/delete guards.
-  // Applies to both lab types (operational expense isn't gated by IPD).
-  fastify.get("/expense/summary", expenseSummaryQuerySchema, async (req, reply) => {
-    try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
-
-      const result = await expensesCol()
-        .aggregate([
-          {
-            $match: {
-              labId: labId(req),
-              createdAt: { $gte: startDate, $lte: endDate },
-              "deletion.status": false,
-            },
-          },
-          {
-            $group: {
-              _id: "$type",
-              total: { $sum: "$amount" },
-              count: { $sum: 1 },
-            },
-          },
-        ])
-        .toArray();
-
-      // Built entirely from whatever types show up in the aggregation — no hardcoded
-      // list here, so new expense types (added in routes/expense.js) show up
-      // automatically without needing an update in this file.
-      const byType = {};
-      result.forEach((r) => {
-        byType[r._id] = { total: r.total, count: r.count };
-      });
-
-      const grandTotal = Object.values(byType).reduce((sum, v) => sum + v.total, 0);
-      const totalEntries = Object.values(byType).reduce((sum, v) => sum + v.count, 0);
-
-      return reply.send({ byType, grandTotal, totalEntries });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch expense summary" });
     }
   });
 }

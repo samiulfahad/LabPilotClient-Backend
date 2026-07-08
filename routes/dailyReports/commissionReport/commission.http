@@ -1,8 +1,0 @@
-@baseUrl = http://localhost:3000
-@token = your_jwt_token_here
-
-### ── Commission ──────────────────────────────────────────────────────────────
-
-### Get Commission Summary
-GET {{baseUrl}}/commission/summary?startDate=1746057600000&endDate=1748649600000
-Authorization: Bearer {{token}}
