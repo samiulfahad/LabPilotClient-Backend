@@ -134,6 +134,7 @@ async function staffRoutes(fastify, options) {
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.requireAdmin);
 
   // ── Scoped duplicate checker ──────────────────────────────────────────────
   const checkDuplicate = async (req, field, value, excludeId = null) => {

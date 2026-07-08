@@ -9,12 +9,14 @@ async function indoorReportRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
+  const requireManage = { onRequest: [fastify.authorize("medicalReport")] };
+
   // ============================================================================
   // POST /indoor-report/add
   // Body: { report, patientId, testId }
   // Uses first incomplete entry — no addedAt needed for add
   // ============================================================================
-  fastify.post("/indoor-report/add", async (req, reply) => {
+  fastify.post("/indoor-report/add", { ...requireManage }, async (req, reply) => {
     try {
       const { report, patientId, testId } = req.body;
 
@@ -28,7 +30,6 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Find the first INCOMPLETE entry for this testId
       const reportIndex = (admission.reports ?? []).findIndex(
         (r) => r.testId?.toString() === testId.toString() && !r.isCompleted,
       );
@@ -78,7 +79,7 @@ async function indoorReportRoutes(fastify) {
   // Body: { report, patientId, testId, addedAt }
   // addedAt disambiguates when the same test appears multiple times
   // ============================================================================
-  fastify.put("/indoor-report/update", async (req, reply) => {
+  fastify.put("/indoor-report/update", { ...requireManage }, async (req, reply) => {
     try {
       const { report, patientId, testId, addedAt } = req.body;
 
@@ -92,12 +93,6 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // console.log("update body:", JSON.stringify({ testId, addedAt, addedAtType: typeof addedAt }));
-      // console.log(
-      //   "reports addedAts:",
-      //   admission.reports.map((r) => ({ addedAt: r.addedAt, type: typeof r.addedAt })),
-      // );
-      // Match by testId + addedAt for precise targeting
       const reportIndex = (admission.reports ?? []).findIndex(
         (r) => r.testId?.toString() === testId.toString() && r.addedAt === Number(addedAt),
       );
@@ -146,7 +141,7 @@ async function indoorReportRoutes(fastify) {
   // PUT /indoor-report/dates
   // Body: { patientId, testId, addedAt, sampleCollectionDate?, reportDate? }
   // ============================================================================
-  fastify.put("/indoor-report/dates", async (req, reply) => {
+  fastify.put("/indoor-report/dates", { ...requireManage }, async (req, reply) => {
     try {
       const { patientId, testId, addedAt, sampleCollectionDate, reportDate } = req.body;
 
@@ -164,7 +159,6 @@ async function indoorReportRoutes(fastify) {
       const admission = await col().findOne({ _id, labId: labId(req) });
       if (!admission) return reply.code(404).send({ error: "Indoor patient not found" });
 
-      // Match by testId + addedAt for precise targeting
       const reportIndex = (admission.reports ?? []).findIndex(
         (r) => r.testId?.toString() === testId.toString() && r.addedAt === Number(addedAt),
       );
@@ -212,7 +206,6 @@ async function indoorReportRoutes(fastify) {
       const reports = admission.reports ?? [];
       const matches = reports.filter((r) => r.testId?.toString() === testId.toString());
 
-      // If addedAt provided, target that exact entry; otherwise prefer completed, fallback to first
       const reportEntry = addedAt
         ? matches.find((r) => r.addedAt === Number(addedAt))
         : (matches.find((r) => r.isCompleted) ?? matches[0]);

@@ -45,6 +45,12 @@ async function authPlugin(fastify) {
     }
   });
 
+  fastify.decorate("requireAdmin", async (req, reply) => {
+    if (req.user.role !== "admin") {
+      return reply.code(403).send({ error: "Forbidden: Admins only" });
+    }
+  });
+
   fastify.decorate("hashToken", (token) => crypto.createHash("sha256").update(token).digest("hex"));
   fastify.decorate("REFRESH_SECRET", REFRESH_SECRET);
   fastify.decorate("REFRESH_EXPIRY", REFRESH_EXPIRY);

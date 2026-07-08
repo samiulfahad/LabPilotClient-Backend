@@ -7,11 +7,13 @@ async function outdoorReportRoutes(fastify, options) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
+  const requireManage = { onRequest: [fastify.authorize("medicalReport")] };
+
   // ============================================================================
   // POST /report/add
   // Body: { report, invoiceId, testId }
   // ============================================================================
-  fastify.post("/report/add", async (req, reply) => {
+  fastify.post("/report/add", { ...requireManage }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -34,7 +36,6 @@ async function outdoorReportRoutes(fastify, options) {
         return reply.code(400).send({ error: "Report already submitted for this test. Use update instead." });
       }
 
-      // Preserve any dates that were set before the report was uploaded
       const existingReport = invoice.tests[testIndex].report ?? {};
       const reportWithDates = {
         ...report,
@@ -73,7 +74,7 @@ async function outdoorReportRoutes(fastify, options) {
   // PUT /report/update
   // Body: { report, invoiceId, testId }
   // ============================================================================
-  fastify.put("/report/update", async (req, reply) => {
+  fastify.put("/report/update", { ...requireManage }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -92,7 +93,6 @@ async function outdoorReportRoutes(fastify, options) {
         return reply.code(404).send({ error: "Test not found in this invoice" });
       }
 
-      // Preserve existing dates when overwriting report content
       const existingReport = invoice.tests[testIndex].report ?? {};
       const reportWithDates = {
         ...report,
@@ -132,7 +132,7 @@ async function outdoorReportRoutes(fastify, options) {
   // Body: { invoiceId, testId, sampleCollectionDate?, reportDate? }
   // Works regardless of whether the report has been submitted yet
   // ============================================================================
-  fastify.put("/report/dates", async (req, reply) => {
+  fastify.put("/report/dates", { ...requireManage }, async (req, reply) => {
     try {
       const { invoiceId, testId, sampleCollectionDate, reportDate } = req.body;
 
@@ -230,7 +230,6 @@ async function outdoorReportRoutes(fastify, options) {
             $project: {
               _id: 0,
               invoiceId: 1,
-              // patient is a nested object — expose the fields explicitly
               patientName: "$patient.name",
               patientGender: "$patient.gender",
               patientAge: "$patient.age",
