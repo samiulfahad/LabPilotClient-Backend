@@ -1,4 +1,4 @@
-import toObjectId from "../../../utils/db.js";
+import toObjectId from "../../utils/db.js";
 
 const summaryQuerySchema = {
   schema: {

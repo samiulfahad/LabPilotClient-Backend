@@ -1,5 +1,5 @@
 // routes/salesReportRoutes.js
-import toObjectId from "../../../utils/db.js";
+import toObjectId from "../../utils/db.js";
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 

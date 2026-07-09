@@ -45,11 +45,11 @@ import indoorReportRoutes from "./routes/report/indoorReports.js";
 
 
 // Daily Report Routes
-import cashmemoRoutes from "./routes/dailyReports/cashmemo/cashmemo.js";
-import salesReportRoutes from "./routes/dailyReports/salesReport/salesReport.js";
-import expenseReportRoutes from "./routes/dailyReports/expenseReport/expenseReport.js";
-import commissionReportRoutes from "./routes/dailyReports/commissionReport/commissionReport.js";
-import collectionReportRoutes from "./routes/dailyReports/collectionReport/collectionReport.js";
+import cashmemoRoutes from "./routes/dailyReports/cashmemo.js";
+import salesReportRoutes from "./routes/dailyReports/salesReport.js";
+import expenseReportRoutes from "./routes/dailyReports/expenseReport.js";
+import commissionReportRoutes from "./routes/dailyReports/commissionReport.js";
+import collectionReportRoutes from "./routes/dailyReports/collectionReport.js";
 
 // Account Routes
 import accountRoutes from "./routes/account/account.js";
