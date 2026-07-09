@@ -113,6 +113,7 @@ async function expenseRoutes(fastify) {
 
   const requireCreate = { onRequest: [fastify.authorize("addExpense")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteExpense")] };
+  const requireExpenseReport = { onRequest: [fastify.authorize("expenseReport")] };
 
   // ── POST /expense/add ─────────────────────────────────────────────────────
   fastify.post("/expense/add", { ...addExpenseSchema, ...requireCreate }, async (req, reply) => {
@@ -226,6 +227,7 @@ async function expenseRoutes(fastify) {
   fastify.get(
     "/expense/all",
     {
+      ...requireExpenseReport,
       schema: {
         tags: ["Expenses"],
         summary: "Get paginated list of active expenses (optionally filtered by type / timeframe)",
@@ -272,6 +274,7 @@ async function expenseRoutes(fastify) {
   fastify.get(
     "/expense/deleted",
     {
+      ...requireExpenseReport,
       schema: {
         tags: ["Expenses"],
         summary: "Get paginated list of soft-deleted expenses",

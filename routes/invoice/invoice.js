@@ -192,6 +192,7 @@ async function invoiceRoutes(fastify) {
 
   const requireCreate = { onRequest: [fastify.authorize("createInvoice")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteInvoice")] };
+  const requireSalesReport = { onRequest: [fastify.authorize("salesReport")] };
 
   // ── GET /invoice/required-data ────────────────────────────────────────────
   fastify.get(
@@ -501,6 +502,7 @@ async function invoiceRoutes(fastify) {
   fastify.get(
     "/invoice/all",
     {
+      ...requireSalesReport,
       schema: {
         tags: ["Invoices"],
         summary: "Get paginated list of active invoices",
@@ -510,14 +512,12 @@ async function invoiceRoutes(fastify) {
     async (req, reply) => {
       try {
         const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
-        const isStaff = req.user.role === "staff";
 
         const result = await col()
           .find(
             {
               labId: labId(req),
               "deletion.status": false,
-              ...(isStaff && { "createdBy.id": userId(req) }),
               ...buildCursorFilter({ cursor, startDate, endDate }),
             },
             {
@@ -553,6 +553,7 @@ async function invoiceRoutes(fastify) {
   fastify.get(
     "/invoice/deleted",
     {
+      ...requireSalesReport,
       schema: {
         tags: ["Invoices"],
         summary: "Get paginated list of deleted invoices",

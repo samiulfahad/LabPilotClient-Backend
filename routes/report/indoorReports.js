@@ -9,14 +9,15 @@ async function indoorReportRoutes(fastify) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  const requireManage = { onRequest: [fastify.authorize("medicalReport")] };
+  const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
+  const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
   // ============================================================================
   // POST /indoor-report/add
   // Body: { report, patientId, testId }
   // Uses first incomplete entry — no addedAt needed for add
   // ============================================================================
-  fastify.post("/indoor-report/add", { ...requireManage }, async (req, reply) => {
+  fastify.post("/indoor-report/add", { ...requireUpload }, async (req, reply) => {
     try {
       const { report, patientId, testId } = req.body;
 
@@ -79,7 +80,7 @@ async function indoorReportRoutes(fastify) {
   // Body: { report, patientId, testId, addedAt }
   // addedAt disambiguates when the same test appears multiple times
   // ============================================================================
-  fastify.put("/indoor-report/update", { ...requireManage }, async (req, reply) => {
+  fastify.put("/indoor-report/update", { ...requireUpload }, async (req, reply) => {
     try {
       const { report, patientId, testId, addedAt } = req.body;
 
@@ -141,7 +142,7 @@ async function indoorReportRoutes(fastify) {
   // PUT /indoor-report/dates
   // Body: { patientId, testId, addedAt, sampleCollectionDate?, reportDate? }
   // ============================================================================
-  fastify.put("/indoor-report/dates", { ...requireManage }, async (req, reply) => {
+  fastify.put("/indoor-report/dates", { ...requireUpload }, async (req, reply) => {
     try {
       const { patientId, testId, addedAt, sampleCollectionDate, reportDate } = req.body;
 
@@ -192,7 +193,7 @@ async function indoorReportRoutes(fastify) {
   // GET /indoor-report/:patientId/:testId?addedAt=
   // addedAt query param selects a specific entry when duplicates exist
   // ============================================================================
-  fastify.get("/indoor-report/:patientId/:testId", async (req, reply) => {
+  fastify.get("/indoor-report/:patientId/:testId", { ...requireDownload }, async (req, reply) => {
     try {
       const { patientId, testId } = req.params;
       const { addedAt } = req.query;

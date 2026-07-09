@@ -109,8 +109,7 @@ async function referrerRoutes(fastify, options) {
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
-
-  const requireManage = { onRequest: [fastify.authorize("manageReferrers")] };
+  fastify.addHook("onRequest", fastify.authorize("manageReferrers"));
 
   // ── GET /referrers ────────────────────────────────────────────────────────
   fastify.get("/referrers", getAllReferrersSchema, async (req, reply) => {
@@ -141,7 +140,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── POST /referrer/add ────────────────────────────────────────────────────
-  fastify.post("/referrer/add", { ...createReferrerSchema, ...requireManage }, async (req, reply) => {
+  fastify.post("/referrer/add", { ...createReferrerSchema }, async (req, reply) => {
     try {
       const { name, contactNumber, degree, details, type, commissionType, commissionValue, isActive } = req.body;
 
@@ -169,7 +168,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── PUT /referrer/edit/:id ────────────────────────────────────────────────
-  fastify.put("/referrer/edit/:id", { ...updateReferrerSchema, ...requireManage }, async (req, reply) => {
+  fastify.put("/referrer/edit/:id", { ...updateReferrerSchema }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
@@ -203,7 +202,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── PATCH /referrer/:id/deactivate ────────────────────────────────────────
-  fastify.patch("/referrer/:id/deactivate", { ...deactivateReferrerSchema, ...requireManage }, async (req, reply) => {
+  fastify.patch("/referrer/:id/deactivate", { ...deactivateReferrerSchema }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
@@ -226,7 +225,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── PATCH /referrer/:id/activate ──────────────────────────────────────────
-  fastify.patch("/referrer/:id/activate", { ...activateReferrerSchema, ...requireManage }, async (req, reply) => {
+  fastify.patch("/referrer/:id/activate", { ...activateReferrerSchema }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
@@ -249,7 +248,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── DELETE /referrer/:id ──────────────────────────────────────────────────
-  fastify.delete("/referrer/:id", { ...deleteReferrerSchema, ...requireManage }, async (req, reply) => {
+  fastify.delete("/referrer/:id", { ...deleteReferrerSchema }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });

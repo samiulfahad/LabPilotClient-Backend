@@ -6,43 +6,62 @@ import swaggerUi from "@fastify/swagger-ui";
 import fastifyCookie from "@fastify/cookie";
 import dotenv from "dotenv";
 
+// Plugins
 import authPlugin from "./plugins/auth.js";
 import smsPlugin from "./plugins/sms.js";
 import billingGuardPlugin from "./plugins/billingGuard.js";
+
+// Index ensure
 import { ensureIndexes } from "./db/indexes.js";
 
+// Auth Routes
 import authRoutes from "./routes/auth/auth.js";
-import referrerRoutes from "./routes/referrer/referrer.js";
-import staffRoutes from "./routes/staff/staff.js";
-import testRoutes from "./routes/test/test.js";
-import productRoutes from "./routes/product/product.js";
+
+// Setup Routes
+import referrerRoutes from "./routes/setup/referrer.js";
+import staffRoutes from "./routes/setup/staff.js";
+import testRoutes from "./routes/setup/test.js";
+import productRoutes from "./routes/setup/product.js";
+import doctorRoutes from "./routes/setup/doctor.js";
+import admissionSpaceRoutes from "./routes/setup/admissionSpace.js";
+
+// Invoice / Outdoor Routes
 import invoiceRoutes from "./routes/invoice/invoice.js";
+
+// Indoor Patient Routes
+import indoorPatientRoutes from "./routes/indoorPatient/indoorPatient.js";
+
+// My Activity Routes
 import myActivityRoutes from "./routes/myActivity/myActivity.js";
 
-// Expense
+// Expense Routes
 import expenseRoutes from "./routes/expense/expense.js";
 
-// Outdoor Report
+// Outdoor Report Routes
 import outdoorReportRoutes from "./routes/report/outdoorReports.js";
-// Indoor Report
+
+// Indoor Report Routes
 import indoorReportRoutes from "./routes/report/indoorReports.js";
 
 
-// Daily Reports
+// Daily Report Routes
 import cashmemoRoutes from "./routes/dailyReports/cashmemo/cashmemo.js";
 import salesReportRoutes from "./routes/dailyReports/salesReport/salesReport.js";
 import expenseReportRoutes from "./routes/dailyReports/expenseReport/expenseReport.js";
 import commissionReportRoutes from "./routes/dailyReports/commissionReport/commissionReport.js";
 import collectionReportRoutes from "./routes/dailyReports/collectionReport/collectionReport.js";
 
+// Account Routes
 import accountRoutes from "./routes/account/account.js";
-import billingRoutes from "./routes/billing/billing.js";
-import doctorRoutes from "./routes/doctor/doctor.js";
-import indoorPatientRoutes from "./routes/indoorPatient/indoorPatient.js";
-import admissionSpaceRoutes from "./routes/admissionSpace/admissionSpace.js";
 
-import internalRoutes from "./routes/internal/internal.js";
+// Billing Routes
+import billingRoutes from "./routes/billing/billing.js";
+
+// Static Data Routes
 import staticDataRoutes from "./routes/staticData/staticData.js";
+
+// Internal Routes
+import internalRoutes from "./routes/internal/internal.js";
 
 
 dotenv.config();

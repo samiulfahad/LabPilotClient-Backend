@@ -27,6 +27,7 @@ async function authRoutes(fastify) {
           labKey: 1,
           registrationNumber: 1,
           type: 1,
+          isActive:1,
           "contact.primary": 1,
           "contact.address": 1,
           "contact.publicEmail": 1,

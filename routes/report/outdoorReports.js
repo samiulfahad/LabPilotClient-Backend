@@ -7,13 +7,13 @@ async function outdoorReportRoutes(fastify, options) {
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  const requireManage = { onRequest: [fastify.authorize("medicalReport")] };
-
+  const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
+  const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
   // ============================================================================
   // POST /report/add
   // Body: { report, invoiceId, testId }
   // ============================================================================
-  fastify.post("/report/add", { ...requireManage }, async (req, reply) => {
+  fastify.post("/report/add", { ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -74,7 +74,7 @@ async function outdoorReportRoutes(fastify, options) {
   // PUT /report/update
   // Body: { report, invoiceId, testId }
   // ============================================================================
-  fastify.put("/report/update", { ...requireManage }, async (req, reply) => {
+  fastify.put("/report/update", { ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -132,7 +132,7 @@ async function outdoorReportRoutes(fastify, options) {
   // Body: { invoiceId, testId, sampleCollectionDate?, reportDate? }
   // Works regardless of whether the report has been submitted yet
   // ============================================================================
-  fastify.put("/report/dates", { ...requireManage }, async (req, reply) => {
+  fastify.put("/report/dates", { ...requireUpload }, async (req, reply) => {
     try {
       const { invoiceId, testId, sampleCollectionDate, reportDate } = req.body;
 
@@ -180,7 +180,7 @@ async function outdoorReportRoutes(fastify, options) {
   // GET /report/:invoiceId/:testId
   // Returns the report + patient info from the parent invoice
   // ============================================================================
-  fastify.get("/report/:invoiceId/:testId", async (req, reply) => {
+  fastify.get("/report/:invoiceId/:testId", { ...requireDownload }, async (req, reply) => {
     try {
       const { invoiceId, testId } = req.params;
 
