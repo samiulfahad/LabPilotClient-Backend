@@ -208,7 +208,7 @@ async function staffRoutes(fastify, options) {
 
       const result = await collection.insertOne({
         labId: labId(req),
-        labKey: parseInt(req.user.labKey),
+        labKey: String(req.user.labKey),
         name: name.trim(),
         ...(email && { email }),
         phone,
