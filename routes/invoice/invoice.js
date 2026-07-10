@@ -300,7 +300,7 @@ async function invoiceRoutes(fastify) {
       // ── Insert invoice ──────────────────────────────────────────────────
       await col().insertOne({
         labId: labId(req),
-        labKey: req.user.labKey,
+        labKey: String (req.user.labKey),
         invoiceId,
         createdAt: Date.now(),
         expiresAt: new Date(Date.now() + 60 * 60 * 24 * 180 * 1000),

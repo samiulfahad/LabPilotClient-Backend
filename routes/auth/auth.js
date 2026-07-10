@@ -2,6 +2,10 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import toObjectId from "../../utils/db.js";
 
+// labKey is always a 4-digit string, e.g. "0472"
+const LAB_KEY_PATTERN = /^\d{4}$/;
+const isValidLabKey = (labKey) => typeof labKey === "string" && LAB_KEY_PATTERN.test(labKey.trim());
+
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
@@ -13,8 +17,11 @@ async function authRoutes(fastify) {
     if (!labKey || !phone || !password) {
       return reply.code(400).send({ error: "Missing required fields" });
     }
+    if (!isValidLabKey(labKey)) {
+      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
+    }
 
-    const staff = await staffsCollection().findOne({ labKey, phone });
+    const staff = await staffsCollection().findOne({ labKey: String(labKey).trim(), phone });
     if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.isDeleted || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
@@ -27,7 +34,7 @@ async function authRoutes(fastify) {
           labKey: 1,
           registrationNumber: 1,
           type: 1,
-          isActive:1,
+          isActive: 1,
           "contact.primary": 1,
           "contact.address": 1,
           "contact.publicEmail": 1,
@@ -40,7 +47,7 @@ async function authRoutes(fastify) {
       name: staff.name,
       role: staff.role,
       permissions: staff.permissions,
-      labKey: staff.labKey,
+      labKey: String(staff.labKey),
       labId: staff.labId.toString(),
       type: lab?.type,
     };
@@ -102,14 +109,18 @@ async function authRoutes(fastify) {
     if (!phone || !labKey) {
       return reply.code(400).send({ error: "Phone and Lab Key are required" });
     }
+    if (!isValidLabKey(labKey)) {
+      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
+    }
+    const normalizedLabKey = String(labKey).trim();
 
-    const staff = await staffsCollection().findOne({ phone, labKey: Number(labKey) });
+    const staff = await staffsCollection().findOne({ phone, labKey: normalizedLabKey });
 
     if (!staff || staff.isDeleted || !staff.isActive) {
       return reply.send({ message: "If this number is registered, an OTP has been sent." });
     }
 
-    const existing = await otpCollection().findOne({ phone, labKey: Number(labKey) });
+    const existing = await otpCollection().findOne({ phone, labKey: normalizedLabKey });
     if (existing) {
       const ageMs = Date.now() - existing.createdAt;
       if (ageMs < 2 * 60 * 1000) {
@@ -122,7 +133,7 @@ async function authRoutes(fastify) {
 
     await otpCollection().insertOne({
       phone,
-      labKey: Number(labKey),
+      labKey: normalizedLabKey,
       staffId: toObjectId(staff._id),
       otp: fastify.hashToken(otp),
       createdAt: Date.now(),
@@ -149,13 +160,16 @@ async function authRoutes(fastify) {
     if (!phone || !labKey || !otp || !newPassword) {
       return reply.code(400).send({ error: "All fields are required" });
     }
+    if (!isValidLabKey(labKey)) {
+      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
+    }
     if (newPassword.length < 6) {
       return reply.code(400).send({ error: "Password must be at least 6 characters" });
     }
 
     const record = await otpCollection().findOne({
       phone,
-      labKey: Number(labKey),
+      labKey: String(labKey).trim(),
       otp: fastify.hashToken(otp),
       expiresAt: { $gt: new Date() },
     });
@@ -196,7 +210,7 @@ async function authRoutes(fastify) {
       name: decoded.name,
       role: decoded.role,
       permissions: decoded.permissions,
-      labKey: decoded.labKey,
+      labKey: String(decoded.labKey),
       labId: decoded.labId,
       type: decoded.type,
     };

@@ -491,6 +491,7 @@ async function indoorPatientRoutes(fastify) {
 
       const doc = {
         labId: labId(req),
+        labKey: String(req.user.labKey),
         admissionId,
         status: "admitted",
         patient: {

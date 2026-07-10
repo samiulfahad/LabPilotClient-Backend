@@ -131,7 +131,6 @@ async function expenseRoutes(fastify) {
 
       const doc = {
         labId: labId(req),
-        labKey: req.user.labKey,
         type,
         description: description?.trim() ?? "",
         amount,
