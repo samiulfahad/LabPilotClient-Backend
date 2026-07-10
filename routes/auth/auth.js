@@ -42,11 +42,15 @@ async function authRoutes(fastify) {
       },
     );
 
+    const grantedPermissions = Object.entries(staff.permissions || {})
+      .filter(([, value]) => value === true)
+      .map(([key]) => key);
+
     const payload = {
       id: staff._id.toString(),
       name: staff.name,
       role: staff.role,
-      permissions: staff.permissions,
+      permissions: grantedPermissions,
       labKey: String(staff.labKey),
       labId: staff.labId.toString(),
       type: lab?.type,
