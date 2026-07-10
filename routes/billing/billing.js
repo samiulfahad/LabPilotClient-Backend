@@ -6,6 +6,7 @@ async function billingRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("billings");
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.authorize("manageBilling"));
 
   // ── GET /billing/status ───────────────────────────────────────────────────
   // Returns the latest unpaid bill for the authenticated lab.

@@ -192,6 +192,7 @@ async function admissionSpaceRoutes(fastify) {
   const now = () => Date.now();
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.requireAdmin);
 
   // ── GET /spaces ─────────────────────────────────────────────────────────────
   fastify.get("/spaces", getAllSpacesSchema, async (req, reply) => {

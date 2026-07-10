@@ -232,10 +232,22 @@ async function staffRoutes(fastify, options) {
   });
 
   // ── PUT /staff/edit/:id ───────────────────────────────────────────────────
+  // Admin accounts are never editable via this route — their permissions
+  // are fixed/full by design, mirroring the frontend which hides the edit
+  // action and the permissions section for role === "admin" rows.
   fastify.put("/staff/edit/:id", updateStaffSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+
+      const existing = await collection.findOne(
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        { projection: { role: 1 } },
+      );
+      if (!existing) return reply.code(404).send({ error: "Staff not found" });
+      if (existing.role === "admin") {
+        return reply.code(403).send({ error: "Admin accounts cannot be edited" });
+      }
 
       const { name, email: rawEmail, permissions, isActive } = req.body;
 
