@@ -159,6 +159,18 @@ async function cashmemoRoutes(fastify) {
   fastify.addHook("onRequest", fastify.authorize("cashmemo"));
 
   // ── GET /cashmemo/summary ─────────────────────────────────────────────────
+  //
+  // Active-invoice figures (totalInvoices/initial/paid/etc.) are scoped by
+  // createdAt in range — that's "business done in this window".
+  //
+  // Deleted-invoice figures (deletedCount/totalAmountDeleted) are scoped by
+  // deletion.at in range instead, NOT createdAt. A deletion is reported
+  // against the window it happened in, regardless of when the invoice was
+  // originally created — e.g. an invoice created 7 days ago but deleted today
+  // must count in TODAY's deletedCount, not in the range it was created in.
+  // This mirrors the IPD deletedFilter pattern and matches what the
+  // /cashmemo/outdoor-deleted-invoices drill-down already does, so the header
+  // count and the drill-down list never disagree.
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
     try {
       const startDate = parseInt(req.query.startDate);
@@ -166,70 +178,80 @@ async function cashmemoRoutes(fastify) {
 
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
-      const [result] = await col()
-        .aggregate(
-          [
-            {
-              $match: {
-                labId: labId(req),
-                createdAt: { $gte: startDate, $lte: endDate },
+      const [activeResult, deletedResult] = await Promise.all([
+        // ── Active invoices created in range ──────────────────────────────
+        col()
+          .aggregate(
+            [
+              {
+                $match: {
+                  labId: labId(req),
+                  createdAt: { $gte: startDate, $lte: endDate },
+                  "deletion.status": false,
+                },
               },
-            },
-            {
-              $facet: {
-                active: [
-                  { $match: { "deletion.status": false } },
-                  {
-                    $group: {
-                      _id: null,
-                      totalInvoices: { $sum: 1 },
-                      initial: { $sum: { $ifNull: ["$amount.initial", 0] } },
-                      labAdjustment: { $sum: { $ifNull: ["$amount.labAdjustment", 0] } },
-                      referrerDiscount: { $sum: { $ifNull: ["$amount.referrerDiscount", 0] } },
-                      referrerCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
-                      totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
-                      totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
-                      totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
-                      fullyPaidCount: {
-                        $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
-                      },
-                    },
+              {
+                $group: {
+                  _id: null,
+                  totalInvoices: { $sum: 1 },
+                  initial: { $sum: { $ifNull: ["$amount.initial", 0] } },
+                  labAdjustment: { $sum: { $ifNull: ["$amount.labAdjustment", 0] } },
+                  referrerDiscount: { $sum: { $ifNull: ["$amount.referrerDiscount", 0] } },
+                  referrerCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
+                  totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
+                  totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
+                  totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
+                  fullyPaidCount: {
+                    $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
                   },
-                  {
-                    $project: {
-                      _id: 0,
-                      totalInvoices: 1,
-                      initial: 1,
-                      labAdjustment: 1,
-                      referrerDiscount: 1,
-                      referrerCommission: 1,
-                      totalFinal: 1,
-                      totalNet: 1,
-                      totalPaid: 1,
-                      totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
-                      fullyPaidCount: 1,
-                    },
-                  },
-                ],
-                deleted: [
-                  { $match: { "deletion.status": true } },
-                  {
-                    $group: {
-                      _id: null,
-                      deletedCount: { $sum: 1 },
-                      totalAmountDeleted: { $sum: { $ifNull: ["$amount.initial", 0] } },
-                    },
-                  },
-                  { $project: { _id: 0, deletedCount: 1, totalAmountDeleted: 1 } },
-                ],
+                },
               },
-            },
-          ],
-          { allowDiskUse: true },
-        )
-        .toArray();
+              {
+                $project: {
+                  _id: 0,
+                  totalInvoices: 1,
+                  initial: 1,
+                  labAdjustment: 1,
+                  referrerDiscount: 1,
+                  referrerCommission: 1,
+                  totalFinal: 1,
+                  totalNet: 1,
+                  totalPaid: 1,
+                  totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
+                  fullyPaidCount: 1,
+                },
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
 
-      const active = result.active[0] ?? {
+        // ── Deleted invoices, scoped by deletion.at (NOT createdAt) ───────
+        col()
+          .aggregate(
+            [
+              {
+                $match: {
+                  labId: labId(req),
+                  "deletion.status": true,
+                  "deletion.at": { $gte: startDate, $lte: endDate },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  deletedCount: { $sum: 1 },
+                  totalAmountDeleted: { $sum: { $ifNull: ["$amount.initial", 0] } },
+                },
+              },
+              { $project: { _id: 0, deletedCount: 1, totalAmountDeleted: 1 } },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
+      ]);
+
+      const active = activeResult[0] ?? {
         totalInvoices: 0,
         initial: 0,
         labAdjustment: 0,
@@ -244,8 +266,8 @@ async function cashmemoRoutes(fastify) {
 
       return reply.send({
         ...active,
-        deletedCount: result.deleted[0]?.deletedCount ?? 0,
-        totalAmountDeleted: result.deleted[0]?.totalAmountDeleted ?? 0,
+        deletedCount: deletedResult[0]?.deletedCount ?? 0,
+        totalAmountDeleted: deletedResult[0]?.totalAmountDeleted ?? 0,
       });
     } catch (err) {
       req.log.error(err);
@@ -305,7 +327,9 @@ async function cashmemoRoutes(fastify) {
   //                      in [startDate, endDate]
   //   admitted/released/ALOS → based on admittedAt/releasedAt in range
   //   currentlyAdmitted       → real-time census, NOT date-bound
-  //   deletedCount/totalAmountDeleted → based on deletion.at in range
+  //   deletedCount/totalAmountDeleted → based on deletion.at in range (NOT
+  //     admittedAt), so a patient admitted 7 days ago but deleted today counts
+  //     in today's deletedCount, exactly like the outdoor summary above.
   //
   // All aggregations/queries below (except the deleted one, which is the
   // mirror-image) are scoped to non-deleted patients only (notDeletedFilter),

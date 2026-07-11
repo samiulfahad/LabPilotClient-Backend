@@ -11,6 +11,13 @@ async function indoorReportRoutes(fastify) {
 
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
+  // IPD is a hospital-only module — diagnosticCenter labs must never reach these routes,
+  // mirroring the isHospital guard pattern used in cashmemo/commissionReport/salesReport routes.
+  fastify.addHook("onRequest", async (req, reply) => {
+    if (req.user.type !== "hospital") {
+      return reply.code(403).send({ error: "Indoor patient management is only available for hospital labs" });
+    }
+  });
 
   // ============================================================================
   // POST /indoor-report/add
