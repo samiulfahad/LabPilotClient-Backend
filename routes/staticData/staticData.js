@@ -65,6 +65,8 @@ export const ALLOWED_PERMISSIONS = [
   { key: "manageTest", label: "ল্যাব টেস্ট ম্যানেজমেন্ট", for: "both" },
   { key: "manageBilling", label: "মাসিক বিলিং", for: "both" },
   { key: "admitPatient", label: "নতুন রোগী ভর্তি", for: "hospitalOnly" },
+  { key: "addExpenseToPatient", label: "ভর্তি রোগীর টেস্ট/ঔষধ/খরচ যোগ", for: "hospitalOnly" },
+  { key: "applyDiscountToPatient", label: "ভর্তি রোগীকে ডিস্কাউন্ট প্রদান", for: "hospitalOnly" },
   { key: "deletePatient", label: "ভর্তি রোগীর তথ্য ডিলিট", for: "hospitalOnly" },
   { key: "releasePatient", label: "ভর্তি রোগী রিলিজ দেওয়া", for: "hospitalOnly" },
 ];

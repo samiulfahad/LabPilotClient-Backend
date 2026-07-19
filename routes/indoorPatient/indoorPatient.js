@@ -334,8 +334,10 @@ async function indoorPatientRoutes(fastify) {
   });
 
   const requireAdmit = { onRequest: [fastify.authorize("admitPatient")] };
+  const requireAddExpense = { onRequest: [fastify.authorize("addExpenseToPatient")] };
   const requireDelete = { onRequest: [fastify.authorize("deletePatient")] };
   const requireRelease = { onRequest: [fastify.authorize("releasePatient")] };
+  const requireDiscount = { onRequest: [fastify.authorize("applyDiscountToPatient")] };
 
   // ── GET /indoor-patients/required-data ──────────────────────────────────────
   fastify.get("/indoor-patients/required-data", getRequiredDataSchema, async (req, reply) => {
@@ -778,7 +780,7 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── POST /indoor-patient/:id/expense ────────────────────────────────────────
-  fastify.post("/indoor-patient/:id/expense", addExpenseSchema, async (req, reply) => {
+  fastify.post("/indoor-patient/:id/expense", { ...addExpenseSchema, ...requireAddExpense }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
@@ -837,7 +839,7 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── POST /indoor-patient/:id/discount ────────────────────────────────────────
-  fastify.post("/indoor-patient/:id/discount", addDiscountSchema, async (req, reply) => {
+  fastify.post("/indoor-patient/:id/discount", { ...addDiscountSchema, ...requireDiscount }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
