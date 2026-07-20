@@ -56,6 +56,7 @@ export const ALLOWED_PERMISSIONS = [
   { key: "salesReport", label: "সেলস রিপোর্ট", for: "both" },
   { key: "expenseReport", label: "এক্সপেন্স (খরচ/ব্যয়) রিপোর্ট", for: "both" },
   { key: "commissionReport", label: "কমিশন রিপোর্ট", for: "both" },
+  { key: "discountReport", label: "ডিস্কাউন্ট রিপোর্ট", for: "both" },
   { key: "collectionReport", label: "কালেকশন রিপোর্র", for: "both" },
   { key: "testReportDownload", label: "টেস্ট রিপোর্ট ডাউনলোড", for: "both" },
   { key: "testReportUpload", label: "টেস্ট রিপোর্ট আপলোড", for: "both" },
