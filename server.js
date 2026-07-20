@@ -50,6 +50,7 @@ import salesReportRoutes from "./routes/dailyReports/salesReport.js";
 import expenseReportRoutes from "./routes/dailyReports/expenseReport.js";
 import commissionReportRoutes from "./routes/dailyReports/commissionReport.js";
 import collectionReportRoutes from "./routes/dailyReports/collectionReport.js";
+import discountReportRoutes from "./routes/dailyReports/discountReport.js";
 
 // Account Routes
 import accountRoutes from "./routes/account/account.js";
@@ -138,6 +139,7 @@ fastify.register(salesReportRoutes, { prefix: API });
 fastify.register(expenseReportRoutes, { prefix: API });
 fastify.register(commissionReportRoutes, { prefix: API });
 fastify.register(collectionReportRoutes, { prefix: API });
+fastify.register(discountReportRoutes, { prefix: API });
 
 // Expense
 fastify.register(expenseRoutes, { prefix: API });
