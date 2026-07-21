@@ -42,9 +42,9 @@ async function authRoutes(fastify) {
       },
     );
 
-    const grantedPermissions = Object.entries(staff.permissions || {})
-      .filter(([, value]) => value === true)
-      .map(([key]) => key);
+    const grantedPermissions = Object.fromEntries(
+      Object.entries(staff.permissions || {}).filter(([, value]) => value === true),
+    );
 
     const payload = {
       id: staff._id.toString(),
@@ -54,6 +54,7 @@ async function authRoutes(fastify) {
       labKey: String(staff.labKey),
       labId: staff.labId.toString(),
       type: lab?.type,
+      maxLabAdjustment: staff.maxLabAdjustment ?? 0,
     };
 
     const deviceId = randomUUID();
@@ -217,6 +218,7 @@ async function authRoutes(fastify) {
       labKey: String(decoded.labKey),
       labId: decoded.labId,
       type: decoded.type,
+      maxLabAdjustment: decoded.maxLabAdjustment ?? 0,
     };
 
     // ── Step 2: Confirm the session exists in DB BEFORE signing anything ───

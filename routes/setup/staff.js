@@ -44,6 +44,11 @@ const staffBodyProperties = {
   phone: { type: "string", minLength: 10, maxLength: 15, description: "Unique phone number" },
   permissions: permissionsSchema,
   isActive: { type: "boolean", description: "Whether the staff member is active (defaults to true)" },
+  maxLabAdjustment: {
+    type: "number",
+    minimum: 0,
+    description: "Max amount this staff can apply as a lab/bill adjustment (0 = disabled)",
+  },
 };
 
 // ─── Route Schemas ────────────────────────────────────────────────────────────
@@ -92,6 +97,7 @@ const updateStaffSchema = {
         email: staffBodyProperties.email,
         permissions: staffBodyProperties.permissions,
         isActive: staffBodyProperties.isActive,
+        maxLabAdjustment: staffBodyProperties.maxLabAdjustment,
       },
     },
   },
@@ -153,7 +159,18 @@ async function staffRoutes(fastify, options) {
       return collection
         .find(
           { labId: labId(req), "deletion.status": { $ne: true } },
-          { projection: { name: 1, email: 1, phone: 1, permissions: 1, isActive: 1, role: 1, deletion: 1 } },
+          {
+            projection: {
+              name: 1,
+              email: 1,
+              phone: 1,
+              permissions: 1,
+              isActive: 1,
+              role: 1,
+              deletion: 1,
+              maxLabAdjustment: 1,
+            },
+          },
         )
         .sort({ name: 1 })
         .toArray();
@@ -185,7 +202,7 @@ async function staffRoutes(fastify, options) {
   // ── POST /staff/add ───────────────────────────────────────────────────────
   fastify.post("/staff/add", createStaffSchema, async (req, reply) => {
     try {
-      const { name, email: rawEmail, phone: rawPhone, permissions, isActive } = req.body;
+      const { name, email: rawEmail, phone: rawPhone, permissions, isActive, maxLabAdjustment } = req.body;
 
       const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
       const phone = rawPhone.trim();
@@ -216,6 +233,7 @@ async function staffRoutes(fastify, options) {
         role: "staff",
         permissions: normalizePermissions(permissions),
         isActive: isActive ?? true,
+        maxLabAdjustment: maxLabAdjustment ?? 0,
         deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
@@ -249,7 +267,7 @@ async function staffRoutes(fastify, options) {
         return reply.code(403).send({ error: "Admin accounts cannot be edited" });
       }
 
-      const { name, email: rawEmail, permissions, isActive } = req.body;
+      const { name, email: rawEmail, permissions, isActive, maxLabAdjustment } = req.body;
 
       const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
 
@@ -267,6 +285,7 @@ async function staffRoutes(fastify, options) {
         ...(email && { email }),
         ...(permissions && { permissions: normalizePermissions(permissions) }),
         ...(isActive !== undefined && { isActive }),
+        ...(maxLabAdjustment !== undefined && { maxLabAdjustment }),
         updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
@@ -359,3 +378,5 @@ async function staffRoutes(fastify, options) {
 }
 
 export default staffRoutes;
+
+
