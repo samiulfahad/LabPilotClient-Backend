@@ -74,17 +74,46 @@ const createDoctorSchema = {
   },
 };
 
+// Basic-info edit only. commissionType/commissionValue are intentionally
+// absent — commission has its own dedicated route below (mirrors the
+// frontend, which edits it in a separate CommissionModal), same split as
+// referrerRoutes.js.
 const updateDoctorSchema = {
   schema: {
     tags: ["Doctors"],
-    summary: "Update an existing doctor",
+    summary: "Update a doctor's basic info",
     params: doctorIdParamSchema,
     body: {
       type: "object",
       required: [],
       additionalProperties: false,
       minProperties: 1,
-      properties: doctorBodyProperties,
+      description: "At least one field must be provided",
+      properties: {
+        name: doctorBodyProperties.name,
+        degree: doctorBodyProperties.degree,
+        contactNumber: doctorBodyProperties.contactNumber,
+        designation: doctorBodyProperties.designation,
+        departments: doctorBodyProperties.departments,
+      },
+    },
+  },
+};
+
+// Dedicated route for commission edits only.
+const updateCommissionSchema = {
+  schema: {
+    tags: ["Doctors"],
+    summary: "Update a doctor's commission",
+    params: doctorIdParamSchema,
+    body: {
+      type: "object",
+      required: ["commissionType", "commissionValue"],
+      additionalProperties: false,
+      properties: {
+        commissionType: doctorBodyProperties.commissionType,
+        commissionValue: doctorBodyProperties.commissionValue,
+      },
     },
   },
 };
@@ -202,7 +231,7 @@ async function doctorRoutes(fastify) {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid doctor ID" });
 
-      const { name, degree, contactNumber, designation, departments, commissionType, commissionValue } = req.body;
+      const { name, degree, contactNumber, designation, departments } = req.body;
 
       if (departments !== undefined) {
         const invalidDepts = validateDepartments(departments);
@@ -212,24 +241,12 @@ async function doctorRoutes(fastify) {
 
       if (validateDesignation(designation)) return reply.code(400).send({ error: "Invalid designation value" });
 
-      if (commissionType === "percentage" && commissionValue !== undefined && commissionValue > 100)
-        return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
-
-      // If only commissionValue is patched, check stored type
-      if (commissionValue !== undefined && commissionType === undefined) {
-        const existing = await collection.findOne({ _id, labId: labId(req) }, { projection: { commissionType: 1 } });
-        if (existing?.commissionType === "percentage" && commissionValue > 100)
-          return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
-      }
-
       const updateData = {
         ...(name !== undefined && { name }),
         ...(degree !== undefined && { degree }),
         ...(contactNumber !== undefined && { contactNumber }),
         ...(designation !== undefined && { designation }),
         ...(departments !== undefined && { departments }),
-        ...(commissionType !== undefined && { commissionType }),
-        ...(commissionValue !== undefined && { commissionValue }),
         updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
@@ -240,6 +257,36 @@ async function doctorRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to update doctor" });
+    }
+  });
+
+  // ── PUT /doctor/:id/commission ────────────────────────────────────────────
+  fastify.put("/doctor/:id/commission", updateCommissionSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid doctor ID" });
+
+      const { commissionType, commissionValue } = req.body;
+
+      if (commissionType === "percentage" && commissionValue > 100)
+        return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
+
+      const result = await collection.updateOne(
+        { _id, labId: labId(req) },
+        {
+          $set: {
+            commissionType,
+            commissionValue,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Doctor not found" });
+
+      return { message: "Commission updated successfully" };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update commission" });
     }
   });
 

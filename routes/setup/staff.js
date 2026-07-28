@@ -43,7 +43,6 @@ const staffBodyProperties = {
   },
   phone: { type: "string", minLength: 10, maxLength: 15, description: "Unique phone number" },
   permissions: permissionsSchema,
-  isActive: { type: "boolean", description: "Whether the staff member is active (defaults to true)" },
   maxLabAdjustment: {
     type: "number",
     minimum: 0,
@@ -60,14 +59,6 @@ const getAllStaffSchema = {
   },
 };
 
-const getStaffByIdSchema = {
-  schema: {
-    tags: ["Staff"],
-    summary: "Get a single staff member by ID",
-    params: staffIdParamSchema,
-  },
-};
-
 const createStaffSchema = {
   schema: {
     tags: ["Staff"],
@@ -81,24 +72,37 @@ const createStaffSchema = {
   },
 };
 
-// Update route intentionally EXCLUDES name/email/phone. These are fixed at
+// Dedicated route for permission edits only. name/email/phone are fixed at
 // registration (mirrors the frontend, which hides those inputs entirely on
-// edit) — excluding them from the schema means additionalProperties:false
-// rejects the fields outright, even via a direct API call bypassing the UI.
-const updateStaffSchema = {
+// edit) — they're absent from this schema's properties, so
+// additionalProperties:false rejects them outright even via a direct API call.
+const updatePermissionsSchema = {
   schema: {
     tags: ["Staff"],
-    summary: "Update an existing staff member (permissions / status / adjustment limit only)",
+    summary: "Update a staff member's permissions",
     params: staffIdParamSchema,
     body: {
       type: "object",
-      required: [],
+      required: ["permissions"],
       additionalProperties: false,
-      minProperties: 1,
-      description: "At least one field must be provided. name/email/phone are immutable after registration.",
       properties: {
         permissions: staffBodyProperties.permissions,
-        isActive: staffBodyProperties.isActive,
+      },
+    },
+  },
+};
+
+// Dedicated route for the lab/bill adjustment limit only.
+const updateAdjustmentSchema = {
+  schema: {
+    tags: ["Staff"],
+    summary: "Update a staff member's max lab/bill adjustment limit",
+    params: staffIdParamSchema,
+    body: {
+      type: "object",
+      required: ["maxLabAdjustment"],
+      additionalProperties: false,
+      properties: {
         maxLabAdjustment: staffBodyProperties.maxLabAdjustment,
       },
     },
@@ -137,7 +141,7 @@ const normalizePermissions = (perms = {}) =>
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function staffRoutes(fastify, options) {
+async function staffRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -153,6 +157,29 @@ async function staffRoutes(fastify, options) {
     };
     if (excludeId) query._id = { $ne: toObjectId(excludeId) };
     return collection.findOne(query, { projection: { _id: 1 } });
+  };
+
+  // Shared guard used by both edit routes: staff must exist in this lab and
+  // must not be an admin account (admins always have fixed, full access).
+  const findEditableStaff = async (req, reply) => {
+    const _id = toObjectId(req.params.id);
+    if (!_id) {
+      reply.code(400).send({ error: "Invalid staff ID" });
+      return null;
+    }
+    const existing = await collection.findOne(
+      { _id, labId: labId(req), "deletion.status": { $ne: true } },
+      { projection: { role: 1 } },
+    );
+    if (!existing) {
+      reply.code(404).send({ error: "Staff not found" });
+      return null;
+    }
+    if (existing.role === "admin") {
+      reply.code(403).send({ error: "Admin accounts cannot be edited" });
+      return null;
+    }
+    return _id;
   };
 
   // ── GET /staffs ───────────────────────────────────────────────────────────
@@ -182,29 +209,10 @@ async function staffRoutes(fastify, options) {
     }
   });
 
-  // ── GET /staff/:id ────────────────────────────────────────────────────────
-  fastify.get("/staff/:id", getStaffByIdSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
-
-      const staffMember = await collection.findOne({
-        _id,
-        labId: labId(req),
-        "deletion.status": { $ne: true },
-      });
-      if (!staffMember) return reply.code(404).send({ error: "Staff not found" });
-      return staffMember;
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch staff member" });
-    }
-  });
-
   // ── POST /staff/add ───────────────────────────────────────────────────────
   fastify.post("/staff/add", createStaffSchema, async (req, reply) => {
     try {
-      const { name, email: rawEmail, phone: rawPhone, permissions, isActive, maxLabAdjustment } = req.body;
+      const { name, email: rawEmail, phone: rawPhone, permissions } = req.body;
 
       const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
       const phone = rawPhone.trim();
@@ -234,8 +242,8 @@ async function staffRoutes(fastify, options) {
         password: hashedPassword,
         role: "staff",
         permissions: normalizePermissions(permissions),
-        isActive: isActive ?? true,
-        maxLabAdjustment: maxLabAdjustment ?? 0,
+        isActive: true,
+        maxLabAdjustment: 0,
         deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
@@ -251,51 +259,51 @@ async function staffRoutes(fastify, options) {
     }
   });
 
-  // ── PUT /staff/edit/:id ───────────────────────────────────────────────────
-  // Admin accounts are never editable via this route — their permissions
-  // are fixed/full by design, mirroring the frontend which hides the edit
-  // action and the permissions section for role === "admin" rows.
-  //
-  // name / email / phone are immutable after registration for ALL staff.
-  // This is enforced at the schema level (additionalProperties:false with
-  // those keys excluded from `properties`), so a request that includes
-  // them — whether from the UI or a raw API call — is rejected with a 400
-  // before the handler even runs. Nothing below reads req.body.name/email.
-  fastify.put("/staff/edit/:id", updateStaffSchema, async (req, reply) => {
+  // ── PUT /staff/:id/permissions ────────────────────────────────────────────
+  fastify.put("/staff/:id/permissions", updatePermissionsSchema, async (req, reply) => {
     try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+      const _id = await findEditableStaff(req, reply);
+      if (!_id) return;
 
-      const existing = await collection.findOne(
+      await collection.updateOne(
         { _id, labId: labId(req), "deletion.status": { $ne: true } },
-        { projection: { role: 1 } },
+        {
+          $set: {
+            permissions: normalizePermissions(req.body.permissions),
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
       );
-      if (!existing) return reply.code(404).send({ error: "Staff not found" });
-      if (existing.role === "admin") {
-        return reply.code(403).send({ error: "Admin accounts cannot be edited" });
-      }
-
-      const { permissions, isActive, maxLabAdjustment } = req.body;
-
-      const updateData = {
-        ...(permissions && { permissions: normalizePermissions(permissions) }),
-        ...(isActive !== undefined && { isActive }),
-        ...(maxLabAdjustment !== undefined && { maxLabAdjustment }),
-        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
-      };
-
-      const result = await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
-        { $set: updateData },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
 
       await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
 
-      return { message: "Staff updated successfully" };
+      return { message: "Permissions updated successfully" };
     } catch (err) {
       req.log.error(err);
-      return reply.code(500).send({ error: "Failed to update staff member" });
+      return reply.code(500).send({ error: "Failed to update permissions" });
+    }
+  });
+
+  // ── PUT /staff/:id/adjustment ──────────────────────────────────────────────
+  fastify.put("/staff/:id/adjustment", updateAdjustmentSchema, async (req, reply) => {
+    try {
+      const _id = await findEditableStaff(req, reply);
+      if (!_id) return;
+
+      await collection.updateOne(
+        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        {
+          $set: {
+            maxLabAdjustment: req.body.maxLabAdjustment,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
+      );
+
+      return { message: "Adjustment limit updated successfully" };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update adjustment limit" });
     }
   });
 

@@ -29,7 +29,6 @@ const referrerBodyProperties = {
   type: { type: "string", enum: ["doctor", "agent", "institute"], description: "Type of referrer" },
   commissionType: { type: "string", enum: ["percentage", "fixed"], description: "How commission is calculated" },
   commissionValue: { type: "number", minimum: 0, description: "Commission amount (max 100 if percentage)" },
-  isActive: { type: "boolean", description: "Whether the referrer is active (defaults to true)" },
 };
 
 // ─── Route Schemas ────────────────────────────────────────────────────────────
@@ -38,14 +37,6 @@ const getAllReferrersSchema = {
   schema: {
     tags: ["Referrers"],
     summary: "Get all referrers for the lab",
-  },
-};
-
-const getReferrerByIdSchema = {
-  schema: {
-    tags: ["Referrers"],
-    summary: "Get a single referrer by ID",
-    params: referrerIdParamSchema,
   },
 };
 
@@ -62,10 +53,14 @@ const createReferrerSchema = {
   },
 };
 
+// Basic-info edit only. commissionType/commissionValue and isActive are
+// intentionally absent — commission has its own dedicated route (mirrors the
+// frontend, which edits it in a separate modal), and isActive is only ever
+// changed via the activate/deactivate routes below.
 const updateReferrerSchema = {
   schema: {
     tags: ["Referrers"],
-    summary: "Update an existing referrer",
+    summary: "Update a referrer's basic info",
     params: referrerIdParamSchema,
     body: {
       type: "object",
@@ -73,7 +68,31 @@ const updateReferrerSchema = {
       additionalProperties: false,
       minProperties: 1,
       description: "At least one field must be provided",
-      properties: referrerBodyProperties,
+      properties: {
+        name: referrerBodyProperties.name,
+        contactNumber: referrerBodyProperties.contactNumber,
+        degree: referrerBodyProperties.degree,
+        details: referrerBodyProperties.details,
+        type: referrerBodyProperties.type,
+      },
+    },
+  },
+};
+
+// Dedicated route for commission edits only.
+const updateCommissionSchema = {
+  schema: {
+    tags: ["Referrers"],
+    summary: "Update a referrer's commission",
+    params: referrerIdParamSchema,
+    body: {
+      type: "object",
+      required: ["commissionType", "commissionValue"],
+      additionalProperties: false,
+      properties: {
+        commissionType: referrerBodyProperties.commissionType,
+        commissionValue: referrerBodyProperties.commissionValue,
+      },
     },
   },
 };
@@ -104,7 +123,7 @@ const deleteReferrerSchema = {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-async function referrerRoutes(fastify, options) {
+async function referrerRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
   const labId = (req) => toObjectId(req.user.labId);
 
@@ -124,25 +143,10 @@ async function referrerRoutes(fastify, options) {
     }
   });
 
-  // ── GET /referrer/:id ─────────────────────────────────────────────────────
-  fastify.get("/referrer/:id", getReferrerByIdSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
-
-      const referrer = await collection.findOne({ _id, labId: labId(req) });
-      if (!referrer) return reply.code(404).send({ error: "Referrer not found" });
-      return referrer;
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch referrer" });
-    }
-  });
-
   // ── POST /referrer/add ────────────────────────────────────────────────────
-  fastify.post("/referrer/add", { ...createReferrerSchema }, async (req, reply) => {
+  fastify.post("/referrer/add", createReferrerSchema, async (req, reply) => {
     try {
-      const { name, contactNumber, degree, details, type, commissionType, commissionValue, isActive } = req.body;
+      const { name, contactNumber, degree, details, type, commissionType, commissionValue } = req.body;
 
       if (commissionType === "percentage" && commissionValue > 100) {
         return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
@@ -157,7 +161,7 @@ async function referrerRoutes(fastify, options) {
         type,
         commissionType,
         commissionValue,
-        isActive: isActive ?? true,
+        isActive: true,
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
       return reply.code(201).send({ _id: result.insertedId });
@@ -168,16 +172,12 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── PUT /referrer/edit/:id ────────────────────────────────────────────────
-  fastify.put("/referrer/edit/:id", { ...updateReferrerSchema }, async (req, reply) => {
+  fastify.put("/referrer/edit/:id", updateReferrerSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
 
-      const { name, contactNumber, degree, details, type, commissionType, commissionValue, isActive } = req.body;
-
-      if (commissionType === "percentage" && commissionValue > 100) {
-        return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
-      }
+      const { name, contactNumber, degree, details, type } = req.body;
 
       const updateData = {
         ...(name !== undefined && { name }),
@@ -185,9 +185,6 @@ async function referrerRoutes(fastify, options) {
         ...(degree !== undefined && { degree }),
         ...(details !== undefined && { details }),
         ...(type !== undefined && { type }),
-        ...(commissionType !== undefined && { commissionType }),
-        ...(commissionValue !== undefined && { commissionValue }),
-        ...(isActive !== undefined && { isActive }),
         updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       };
 
@@ -201,8 +198,39 @@ async function referrerRoutes(fastify, options) {
     }
   });
 
+  // ── PUT /referrer/:id/commission ──────────────────────────────────────────
+  fastify.put("/referrer/:id/commission", updateCommissionSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
+
+      const { commissionType, commissionValue } = req.body;
+
+      if (commissionType === "percentage" && commissionValue > 100) {
+        return reply.code(400).send({ error: "Percentage must be between 0 and 100" });
+      }
+
+      const result = await collection.updateOne(
+        { _id, labId: labId(req) },
+        {
+          $set: {
+            commissionType,
+            commissionValue,
+            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+          },
+        },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
+
+      return { message: "Commission updated successfully" };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update commission" });
+    }
+  });
+
   // ── PATCH /referrer/:id/deactivate ────────────────────────────────────────
-  fastify.patch("/referrer/:id/deactivate", { ...deactivateReferrerSchema }, async (req, reply) => {
+  fastify.patch("/referrer/:id/deactivate", deactivateReferrerSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
@@ -225,7 +253,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── PATCH /referrer/:id/activate ──────────────────────────────────────────
-  fastify.patch("/referrer/:id/activate", { ...activateReferrerSchema }, async (req, reply) => {
+  fastify.patch("/referrer/:id/activate", activateReferrerSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
@@ -248,7 +276,7 @@ async function referrerRoutes(fastify, options) {
   });
 
   // ── DELETE /referrer/:id ──────────────────────────────────────────────────
-  fastify.delete("/referrer/:id", { ...deleteReferrerSchema }, async (req, reply) => {
+  fastify.delete("/referrer/:id", deleteReferrerSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });

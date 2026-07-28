@@ -7,7 +7,7 @@
  *   _id          : ObjectId,
  *   labId        : ObjectId,
  *   name         : String,
- *   chargePerDay : Number,
+ *   chargePerDay : Number,         // set on create, changed only via /price
  *   departments  : [String],       // array, min 1 item
  *   multiBed     : Boolean,
  *
@@ -73,9 +73,13 @@ const departmentsSchema = {
   uniqueItems: true,
 };
 
-const spaceBodyProperties = {
+// Fields shared between create/update. `chargePerDay` is intentionally NOT
+// part of this shared set — it's only settable at creation time and from
+// then on only through the dedicated /price route (same split as
+// commissionType/commissionValue on referrers, which have their own route
+// and are excluded from the general referrer update schema).
+const spaceCoreProperties = {
   name: { type: "string", minLength: 1, maxLength: 100 },
-  chargePerDay: { type: "number", minimum: 0 },
   departments: departmentsSchema,
   multiBed: { type: "boolean" },
   multiBedConf: { oneOf: [multiBedConfSchema, { type: "null" }] },
@@ -108,21 +112,41 @@ const createSpaceSchema = {
       type: "object",
       required: ["name", "chargePerDay", "departments", "multiBed"],
       additionalProperties: false,
-      properties: spaceBodyProperties,
+      properties: {
+        ...spaceCoreProperties,
+        chargePerDay: { type: "number", minimum: 0 },
+      },
     },
   },
 };
 
+// chargePerDay deliberately excluded — see /space/:id/price below.
 const updateSpaceSchema = {
   schema: {
     tags: ["Spaces"],
-    summary: "Update a space",
+    summary: "Update a space's basic info",
     params: spaceIdParamSchema,
     body: {
       type: "object",
       minProperties: 1,
       additionalProperties: false,
-      properties: spaceBodyProperties,
+      properties: spaceCoreProperties,
+    },
+  },
+};
+
+// Dedicated route for price edits only — same pattern as
+// PUT /referrer/:id/commission.
+const updatePriceSchema = {
+  schema: {
+    tags: ["Spaces"],
+    summary: "Update a space's price (charge per day)",
+    params: spaceIdParamSchema,
+    body: {
+      type: "object",
+      required: ["chargePerDay"],
+      additionalProperties: false,
+      properties: { chargePerDay: { type: "number", minimum: 0 } },
     },
   },
 };
@@ -281,13 +305,13 @@ async function admissionSpaceRoutes(fastify) {
     }
   });
 
-  // ── PUT /space/edit/:id ─────────────────────────────────────────────────────
+  // ── PUT /space/edit/:id — basic info only, no price ─────────────────────────
   fastify.put("/space/edit/:id", updateSpaceSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid space ID" });
 
-      const { name, chargePerDay, departments, multiBed, multiBedConf } = req.body;
+      const { name, departments, multiBed, multiBedConf } = req.body;
 
       const resolvedMultiBedConf =
         multiBed === false
@@ -298,7 +322,6 @@ async function admissionSpaceRoutes(fastify) {
 
       const $set = {
         ...(name !== undefined && { name: name.trim() }),
-        ...(chargePerDay !== undefined && { chargePerDay }),
         ...(departments !== undefined && { departments }),
         ...(multiBed !== undefined && { multiBed }),
         ...(resolvedMultiBedConf !== undefined && { multiBedConf: resolvedMultiBedConf }),
@@ -312,6 +335,26 @@ async function admissionSpaceRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to update space" });
+    }
+  });
+
+  // ── PATCH /space/:id/price ──────────────────────────────────────────────────
+  fastify.patch("/space/:id/price", updatePriceSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid space ID" });
+
+      const { chargePerDay } = req.body;
+
+      const result = await col().updateOne(
+        { _id, labId: labId(req) },
+        { $set: { chargePerDay, updated: { at: now(), by: by(req) } } },
+      );
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Space not found" });
+      return { message: "Price updated successfully" };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update price" });
     }
   });
 
