@@ -81,20 +81,22 @@ const createStaffSchema = {
   },
 };
 
+// Update route intentionally EXCLUDES name/email/phone. These are fixed at
+// registration (mirrors the frontend, which hides those inputs entirely on
+// edit) — excluding them from the schema means additionalProperties:false
+// rejects the fields outright, even via a direct API call bypassing the UI.
 const updateStaffSchema = {
   schema: {
     tags: ["Staff"],
-    summary: "Update an existing staff member",
+    summary: "Update an existing staff member (permissions / status / adjustment limit only)",
     params: staffIdParamSchema,
     body: {
       type: "object",
       required: [],
       additionalProperties: false,
       minProperties: 1,
-      description: "At least one field must be provided",
+      description: "At least one field must be provided. name/email/phone are immutable after registration.",
       properties: {
-        name: staffBodyProperties.name,
-        email: staffBodyProperties.email,
         permissions: staffBodyProperties.permissions,
         isActive: staffBodyProperties.isActive,
         maxLabAdjustment: staffBodyProperties.maxLabAdjustment,
@@ -253,6 +255,12 @@ async function staffRoutes(fastify, options) {
   // Admin accounts are never editable via this route — their permissions
   // are fixed/full by design, mirroring the frontend which hides the edit
   // action and the permissions section for role === "admin" rows.
+  //
+  // name / email / phone are immutable after registration for ALL staff.
+  // This is enforced at the schema level (additionalProperties:false with
+  // those keys excluded from `properties`), so a request that includes
+  // them — whether from the UI or a raw API call — is rejected with a 400
+  // before the handler even runs. Nothing below reads req.body.name/email.
   fastify.put("/staff/edit/:id", updateStaffSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
@@ -267,22 +275,9 @@ async function staffRoutes(fastify, options) {
         return reply.code(403).send({ error: "Admin accounts cannot be edited" });
       }
 
-      const { name, email: rawEmail, permissions, isActive, maxLabAdjustment } = req.body;
-
-      const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
-
-      if (email) {
-        if (!EMAIL_REGEX.test(email)) {
-          return reply.code(400).send({ error: "Invalid email format" });
-        }
-        if (await checkDuplicate(req, "email", email, req.params.id)) {
-          return reply.code(409).send({ error: "Email already exists in this lab" });
-        }
-      }
+      const { permissions, isActive, maxLabAdjustment } = req.body;
 
       const updateData = {
-        ...(name && { name: name.trim() }),
-        ...(email && { email }),
         ...(permissions && { permissions: normalizePermissions(permissions) }),
         ...(isActive !== undefined && { isActive }),
         ...(maxLabAdjustment !== undefined && { maxLabAdjustment }),
@@ -378,5 +373,3 @@ async function staffRoutes(fastify, options) {
 }
 
 export default staffRoutes;
-
-
