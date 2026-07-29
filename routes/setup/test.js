@@ -124,16 +124,15 @@ const createTestSchema = {
   },
 };
 
-const updateTestSchema = {
+const updateTestPriceSchema = {
   schema: {
     tags: ["Tests"],
-    summary: "Update price or schema of a test",
+    summary: "Update the price of a test",
     params: testIdParamSchema,
     body: {
       type: "object",
+      required: ["price"],
       additionalProperties: false,
-      minProperties: 1,
-      description: "At least one of price or schemaId must be provided",
       properties: {
         price: {
           type: "number",
@@ -142,11 +141,26 @@ const updateTestSchema = {
           multipleOf: 0.01,
           description: "Updated price (max 2 decimal places)",
         },
+      },
+    },
+  },
+};
+
+const updateTestSchemaIdSchema = {
+  schema: {
+    tags: ["Tests"],
+    summary: "Update (or unset) the report schema of a test",
+    params: testIdParamSchema,
+    body: {
+      type: "object",
+      required: ["schemaId"],
+      additionalProperties: false,
+      properties: {
         schemaId: {
           type: ["string", "null"],
           minLength: 24,
           maxLength: 24,
-          description: "Updated report schema ObjectId or null to unset",
+          description: "Updated report schema ObjectId, or null to unset",
         },
       },
     },
@@ -280,18 +294,17 @@ async function testRoutes(fastify) {
     }
   });
 
-  // ── PATCH /test/:testId ───────────────────────────────────────────────────
-  fastify.patch("/test/:testId", { ...updateTestSchema }, async (req, reply) => {
+  // ── PATCH /test/:testId/price ─────────────────────────────────────────────
+  fastify.patch("/test/:testId/price", { ...updateTestPriceSchema }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.testId);
       if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
 
-      const { price, schemaId } = req.body;
-
-      const update = {};
-      if (price !== undefined) update.price = price;
-      if (schemaId !== undefined) update.schemaId = schemaId ? toObjectId(schemaId) : null;
-      update.updated = { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } };
+      const { price } = req.body;
+      const update = {
+        price,
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+      };
 
       const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Test not found" });
@@ -300,7 +313,30 @@ async function testRoutes(fastify) {
       return reply.send(updated);
     } catch (err) {
       req.log.error(err);
-      return reply.code(500).send({ error: "Failed to update test" });
+      return reply.code(500).send({ error: "Failed to update test price" });
+    }
+  });
+
+  // ── PATCH /test/:testId/schema ────────────────────────────────────────────
+  fastify.patch("/test/:testId/schema", { ...updateTestSchemaIdSchema }, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.testId);
+      if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
+
+      const { schemaId } = req.body;
+      const update = {
+        schemaId: schemaId ? toObjectId(schemaId) : null,
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+      };
+
+      const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Test not found" });
+
+      const updated = await col().findOne({ _id, labId: labId(req) });
+      return reply.send(updated);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update test schema" });
     }
   });
 

@@ -53,10 +53,9 @@ const createReferrerSchema = {
   },
 };
 
-// Basic-info edit only. commissionType/commissionValue and isActive are
-// intentionally absent — commission has its own dedicated route (mirrors the
-// frontend, which edits it in a separate modal), and isActive is only ever
-// changed via the activate/deactivate routes below.
+// Basic-info edit only. commissionType/commissionValue are intentionally
+// absent — commission has its own dedicated route (mirrors the frontend,
+// which edits it in a separate modal).
 const updateReferrerSchema = {
   schema: {
     tags: ["Referrers"],
@@ -94,22 +93,6 @@ const updateCommissionSchema = {
         commissionValue: referrerBodyProperties.commissionValue,
       },
     },
-  },
-};
-
-const deactivateReferrerSchema = {
-  schema: {
-    tags: ["Referrers"],
-    summary: "Deactivate a referrer",
-    params: referrerIdParamSchema,
-  },
-};
-
-const activateReferrerSchema = {
-  schema: {
-    tags: ["Referrers"],
-    summary: "Activate a referrer",
-    params: referrerIdParamSchema,
   },
 };
 
@@ -161,7 +144,6 @@ async function referrerRoutes(fastify) {
         type,
         commissionType,
         commissionValue,
-        isActive: true,
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
       return reply.code(201).send({ _id: result.insertedId });
@@ -226,52 +208,6 @@ async function referrerRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to update commission" });
-    }
-  });
-
-  // ── PATCH /referrer/:id/deactivate ────────────────────────────────────────
-  fastify.patch("/referrer/:id/deactivate", deactivateReferrerSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
-
-      const result = await collection.updateOne(
-        { _id, labId: labId(req) },
-        {
-          $set: {
-            isActive: false,
-            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
-          },
-        },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
-      return { message: "Referrer deactivated successfully", _id: req.params.id };
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to deactivate referrer" });
-    }
-  });
-
-  // ── PATCH /referrer/:id/activate ──────────────────────────────────────────
-  fastify.patch("/referrer/:id/activate", activateReferrerSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid referrer ID" });
-
-      const result = await collection.updateOne(
-        { _id, labId: labId(req) },
-        {
-          $set: {
-            isActive: true,
-            updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
-          },
-        },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Referrer not found" });
-      return { message: "Referrer activated successfully", _id: req.params.id };
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to activate referrer" });
     }
   });
 

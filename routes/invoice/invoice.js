@@ -210,7 +210,7 @@ async function invoiceRoutes(fastify) {
           fastify.mongo.db
             .collection("referrers")
             .find(
-              { labId: labId(req), isActive: true },
+              { labId: labId(req) },
               { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
             )
             .sort({ name: 1 })

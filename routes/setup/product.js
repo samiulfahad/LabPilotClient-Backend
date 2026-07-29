@@ -51,6 +51,34 @@ const stockAdjustSchema = {
   },
 };
 
+// Price-only update — separate from info, so a price change never risks
+// touching name/description/unit/stock-tracking fields.
+const updateItemPriceSchema = {
+  type: "object",
+  required: ["price"],
+  additionalProperties: false,
+  properties: {
+    price: { type: "number", minimum: 0, maximum: 10000000 },
+  },
+};
+
+// Info-only update — name, description, unit, and the hasStock toggle.
+// Deliberately excludes `price` (its own route) and raw `stock` (numeric
+// stock changes always go through /stock/adjust so every change carries a
+// delta + note, i.e. an audit trail).
+const updateItemInfoSchema = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 100 },
+    description: { type: ["string", "null"], maxLength: 500 },
+    hasStock: { type: "boolean" },
+    unitType: { type: "string", enum: ["stripe", "bottle", "vial", "sachet", "piece"] },
+    unitQty: { type: ["integer", "null"], minimum: 1 },
+  },
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 const LAB_PRODUCT_LIMIT = 500;
@@ -117,22 +145,6 @@ async function productRoutes(fastify) {
     },
   );
 
-  // ── GET /products/:itemId ──────────────────────────────────────────────────
-  fastify.get(
-    "/products/:itemId",
-    { schema: { tags: ["Products"], summary: "Get a single catalog item", params: catalogIdParamSchema } },
-    async (req, reply) => {
-      try {
-        const item = await col().findOne({ _id: toObjectId(req.params.itemId), labId: labId(req) });
-        if (!item) return reply.code(404).send({ error: "Item not found" });
-        return reply.send(item);
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch item" });
-      }
-    },
-  );
-
   // ── POST /products ─────────────────────────────────────────────────────────
   fastify.post(
     "/products",
@@ -177,34 +189,48 @@ async function productRoutes(fastify) {
     },
   );
 
-  // ── PATCH /products/:itemId ────────────────────────────────────────────────
+  // ── PATCH /products/:itemId/price ──────────────────────────────────────────
   fastify.patch(
-    "/products/:itemId",
+    "/products/:itemId/price",
     {
       schema: {
         tags: ["Products"],
-        summary: "Update a catalog item",
+        summary: "Update the price of a catalog item",
         params: catalogIdParamSchema,
-        body: {
-          type: "object",
-          additionalProperties: false,
-          minProperties: 1,
-          properties: {
-            name: { type: "string", minLength: 1, maxLength: 100 },
-            price: { type: "number", minimum: 0, maximum: 10000000 },
-            description: { type: ["string", "null"], maxLength: 500 },
-            hasStock: { type: "boolean" },
-            stock: { type: "integer", minimum: 0 },
-            unitType: { type: "string", enum: ["stripe", "bottle", "vial", "sachet", "piece"] },
-            unitQty: { type: ["integer", "null"], minimum: 1 },
-          },
-        },
+        body: updateItemPriceSchema,
       },
     },
     async (req, reply) => {
       try {
         const { itemId } = req.params;
-        const { name, price, description, hasStock, stock } = req.body;
+        const { price } = req.body;
+
+        const result = await col().updateOne({ _id: toObjectId(itemId), labId: labId(req) }, { $set: { price } });
+        if (result.matchedCount === 0) return reply.code(404).send({ error: "Item not found" });
+
+        return reply.send({ success: true, price });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to update price" });
+      }
+    },
+  );
+
+  // ── PATCH /products/:itemId/info ───────────────────────────────────────────
+  fastify.patch(
+    "/products/:itemId/info",
+    {
+      schema: {
+        tags: ["Products"],
+        summary: "Update name, description, unit, or stock-tracking toggle of a catalog item",
+        params: catalogIdParamSchema,
+        body: updateItemInfoSchema,
+      },
+    },
+    async (req, reply) => {
+      try {
+        const { itemId } = req.params;
+        const { name, description, hasStock, unitType, unitQty } = req.body;
 
         const existing = await col().findOne(
           { _id: toObjectId(itemId), labId: labId(req) },
@@ -222,20 +248,24 @@ async function productRoutes(fastify) {
           if (dup) return reply.code(409).send({ error: `A ${existing.type} with this name already exists` });
         }
 
-        const effectiveHasStock = hasStock !== undefined ? hasStock : existing.hasStock;
         const update = {};
         if (name !== undefined) update.name = name.trim();
-        if (price !== undefined) update.price = price;
         if (description !== undefined) update.description = description?.trim() ?? null;
-        if (hasStock !== undefined) {
-          update.hasStock = existing.type === "service" ? false : hasStock;
-          if (!update.hasStock) update.stock = null;
+
+        if (hasStock !== undefined && existing.type !== "service") {
+          update.hasStock = hasStock;
+          if (!hasStock) {
+            // Turning tracking off clears the number outright.
+            update.stock = null;
+          } else if (!existing.hasStock) {
+            // Turning tracking on (from off) starts at 0 — the actual
+            // count is then set via /stock/adjust, which keeps every
+            // stock change attached to a delta + note.
+            update.stock = 0;
+          }
         }
-        if (stock !== undefined && effectiveHasStock && existing.type !== "service") {
-          update.stock = stock;
-        }
+
         if (existing.type === "medicine") {
-          const { unitType, unitQty } = req.body;
           if (unitType !== undefined) {
             update.unitType = unitType;
             update.unitQty = unitType === "piece" ? null : (unitQty ?? null);
@@ -248,7 +278,7 @@ async function productRoutes(fastify) {
         return reply.send({ success: true, ...update });
       } catch (err) {
         req.log.error(err);
-        return reply.code(500).send({ error: "Failed to update item" });
+        return reply.code(500).send({ error: "Failed to update item info" });
       }
     },
   );
