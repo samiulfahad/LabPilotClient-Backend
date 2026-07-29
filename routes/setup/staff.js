@@ -59,6 +59,9 @@ const getAllStaffSchema = {
   },
 };
 
+// maxLabAdjustment is optional here (defaults to 0 in the handler if omitted)
+// so it can be set at registration time instead of requiring the separate
+// PUT /staff/:id/adjustment route right after.
 const createStaffSchema = {
   schema: {
     tags: ["Staff"],
@@ -92,7 +95,8 @@ const updatePermissionsSchema = {
   },
 };
 
-// Dedicated route for the lab/bill adjustment limit only.
+// Dedicated route for the lab/bill adjustment limit only — still used to
+// change the limit after a staff member already exists.
 const updateAdjustmentSchema = {
   schema: {
     tags: ["Staff"],
@@ -212,7 +216,7 @@ async function staffRoutes(fastify) {
   // ── POST /staff/add ───────────────────────────────────────────────────────
   fastify.post("/staff/add", createStaffSchema, async (req, reply) => {
     try {
-      const { name, email: rawEmail, phone: rawPhone, permissions } = req.body;
+      const { name, email: rawEmail, phone: rawPhone, permissions, maxLabAdjustment } = req.body;
 
       const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
       const phone = rawPhone.trim();
@@ -243,7 +247,7 @@ async function staffRoutes(fastify) {
         role: "staff",
         permissions: normalizePermissions(permissions),
         isActive: true,
-        maxLabAdjustment: 0,
+        maxLabAdjustment: maxLabAdjustment ?? 0,
         deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
@@ -323,6 +327,12 @@ async function staffRoutes(fastify) {
         },
       );
       if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+
+      // Kill all active sessions for this staff member — a deactivated
+      // account shouldn't be able to keep using an already-issued refresh
+      // token until it naturally expires.
+      await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
+
       return { message: "Staff deactivated successfully", _id: req.params.id };
     } catch (err) {
       req.log.error(err);
