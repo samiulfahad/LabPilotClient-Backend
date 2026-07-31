@@ -18,6 +18,7 @@ const summaryQuerySchema = {
 async function commissionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
+  const testsCol = () => fastify.mongo.db.collection("tests");
   const labId = (req) => toObjectId(req.user.labId);
   const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
@@ -37,8 +38,15 @@ async function commissionReportRoutes(fastify) {
     if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
     try {
+      // ── Per-test commission rates for this lab: name → commission ────────────
+      // Keyed by trimmed test name since invoice/expense line items store the
+      // test name as free text, not a testId reference back to this collection.
+      const testRatesPromise = testsCol()
+        .find({ labId: labId(req) }, { projection: { name: 1, commission: 1 } })
+        .toArray();
+
       // ── Outdoor: commission + test data per referrer (Referrer Based + Outdoor half of Test Based) ──
-      const outdoorRows = await col()
+      const outdoorRowsPromise = col()
         .aggregate(
           [
             {
@@ -93,8 +101,8 @@ async function commissionReportRoutes(fastify) {
       // rather than querying indoorPatients for a collection that's always empty.
       // Soft-deleted admissions are excluded via notDeletedFilter so their test
       // expenses never contribute to a referrer/doctor's counts.
-      const indoorRows = isHospital(req)
-        ? await indoorCol()
+      const indoorRowsPromise = isHospital(req)
+        ? indoorCol()
             .aggregate(
               [
                 { $match: notDeletedFilter(req) },
@@ -136,7 +144,18 @@ async function commissionReportRoutes(fastify) {
               { allowDiskUse: true },
             )
             .toArray()
-        : [];
+        : Promise.resolve([]);
+
+      const [testDocs, outdoorRows, indoorRows] = await Promise.all([
+        testRatesPromise,
+        outdoorRowsPromise,
+        indoorRowsPromise,
+      ]);
+
+      const testRates = {};
+      for (const t of testDocs) {
+        if (t.name) testRates[t.name.trim()] = t.commission ?? 0;
+      }
 
       // ── Fold indoor rows into a per-referrer map: key -> { name, type, isRegistered, tests, totalTests } ──
       const indoorByReferrer = new Map();
@@ -227,6 +246,7 @@ async function commissionReportRoutes(fastify) {
       return reply.send({
         registered,
         unregistered,
+        testRates,
         totals: { totalCommission, totalDiscount, totalFinal, totalNet, totalInvoices },
       });
     } catch (err) {

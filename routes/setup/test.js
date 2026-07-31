@@ -25,6 +25,13 @@ const schemaIdParamSchema = {
   },
 };
 
+const moneyFieldSchema = {
+  type: "number",
+  minimum: 0,
+  maximum: 1000000,
+  multipleOf: 0.01,
+};
+
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const getAllTestsSchema = {
@@ -113,11 +120,12 @@ const createTestSchema = {
           description: "ObjectId of the report schema (optional)",
         },
         price: {
-          type: "number",
-          minimum: 0,
-          maximum: 1000000,
-          multipleOf: 0.01,
+          ...moneyFieldSchema,
           description: "Price of the test (max 2 decimal places)",
+        },
+        commission: {
+          ...moneyFieldSchema,
+          description: "Referrer/staff commission on this test (max 2 decimal places)",
         },
       },
     },
@@ -135,11 +143,27 @@ const updateTestPriceSchema = {
       additionalProperties: false,
       properties: {
         price: {
-          type: "number",
-          minimum: 0,
-          maximum: 1000000,
-          multipleOf: 0.01,
+          ...moneyFieldSchema,
           description: "Updated price (max 2 decimal places)",
+        },
+      },
+    },
+  },
+};
+
+const updateTestCommissionSchema = {
+  schema: {
+    tags: ["Tests"],
+    summary: "Update the commission of a test",
+    params: testIdParamSchema,
+    body: {
+      type: "object",
+      required: ["commission"],
+      additionalProperties: false,
+      properties: {
+        commission: {
+          ...moneyFieldSchema,
+          description: "Updated commission (max 2 decimal places)",
         },
       },
     },
@@ -271,7 +295,13 @@ async function testRoutes(fastify) {
   // ── POST /test ────────────────────────────────────────────────────────────
   fastify.post("/test", { ...createTestSchema }, async (req, reply) => {
     try {
-      const { name, testId, categoryId, schemaId, price } = req.body;
+      const { name, testId, categoryId, schemaId, price, commission } = req.body;
+
+      const finalPrice = price ?? 0;
+      const finalCommission = commission ?? 0;
+      if (finalCommission > finalPrice) {
+        return reply.code(400).send({ error: "Commission cannot exceed price" });
+      }
 
       const existing = await col().findOne({ labId: labId(req), testId });
       if (existing) return reply.code(409).send({ error: "Test already registered" });
@@ -282,7 +312,8 @@ async function testRoutes(fastify) {
         testId, // ← plain string reference to catalog _id
         categoryId: categoryId ? toObjectId(categoryId) : null,
         schemaId: schemaId ? toObjectId(schemaId) : null,
-        price: price ?? 0,
+        price: finalPrice,
+        commission: finalCommission,
         createdAt: Date.now(),
       };
 
@@ -301,6 +332,13 @@ async function testRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
 
       const { price } = req.body;
+
+      const existing = await col().findOne({ _id, labId: labId(req) }, { projection: { commission: 1 } });
+      if (!existing) return reply.code(404).send({ error: "Test not found" });
+      if (price < (existing.commission ?? 0)) {
+        return reply.code(400).send({ error: "Price cannot be less than the existing commission" });
+      }
+
       const update = {
         price,
         updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
@@ -314,6 +352,36 @@ async function testRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to update test price" });
+    }
+  });
+
+  // ── PATCH /test/:testId/commission ────────────────────────────────────────
+  fastify.patch("/test/:testId/commission", { ...updateTestCommissionSchema }, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.testId);
+      if (!_id) return reply.code(400).send({ error: "Invalid test ID" });
+
+      const { commission } = req.body;
+
+      const existing = await col().findOne({ _id, labId: labId(req) }, { projection: { price: 1 } });
+      if (!existing) return reply.code(404).send({ error: "Test not found" });
+      if (commission > (existing.price ?? 0)) {
+        return reply.code(400).send({ error: "Commission cannot exceed price" });
+      }
+
+      const update = {
+        commission,
+        updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
+      };
+
+      const result = await col().updateOne({ _id, labId: labId(req) }, { $set: update });
+      if (result.matchedCount === 0) return reply.code(404).send({ error: "Test not found" });
+
+      const updated = await col().findOne({ _id, labId: labId(req) });
+      return reply.send(updated);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update test commission" });
     }
   });
 

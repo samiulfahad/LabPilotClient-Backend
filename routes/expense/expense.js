@@ -37,7 +37,7 @@ const paginatedResponse = (result, limit, cursorField) => {
 
 // ─── Reusable Schema Definitions ─────────────────────────────────────────────
 
-const EXPENSE_TYPES = ["staffSalary", "medicine", "testKit", "products", "others"];
+const EXPENSE_TYPES = ["staffSalary", "medicine", "testKit", "products", "commission", "others"];
 
 const expenseIdParamSchema = {
   type: "object",
@@ -161,7 +161,7 @@ async function expenseRoutes(fastify) {
 
   // ── PATCH /expense/:expenseId/edit ────────────────────────────────────────
   // Only description is editable — type and amount are immutable once created.
-  // No permission gate: any authenticated staff (or admin) can edit.
+  // Restricted to the staff member who created the expense, or an admin.
   fastify.patch("/expense/:expenseId/edit", { ...editExpenseSchema }, async (req, reply) => {
     try {
       const { expenseId } = req.params;
@@ -169,10 +169,18 @@ async function expenseRoutes(fastify) {
 
       const expense = await col().findOne(
         { _id: toObjectId(expenseId), labId: labId(req) },
-        { projection: { "deletion.status": 1 } },
+        { projection: { "deletion.status": 1, "createdBy.id": 1 } },
       );
       if (!expense) return reply.code(404).send({ error: "Expense not found" });
       if (expense.deletion.status) return reply.code(400).send({ error: "Cannot edit a deleted expense" });
+
+      const isCreator = expense.createdBy?.id?.toString() === req.user.id?.toString();
+      const isAdmin = req.user.role === "admin";
+      if (!isCreator && !isAdmin) {
+        return reply
+          .code(403)
+          .send({ error: "Only the staff member who created this expense (or an admin) can edit it." });
+      }
 
       const update = {
         description: description.trim(),
@@ -253,7 +261,10 @@ async function expenseRoutes(fastify) {
                 description: 1,
                 amount: 1,
                 createdAt: 1,
+                "createdBy.id": 1,
                 "createdBy.name": 1,
+                "updated.at": 1,
+                "updated.by.name": 1,
               },
             },
           )
