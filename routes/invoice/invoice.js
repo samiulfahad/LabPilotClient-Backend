@@ -33,6 +33,10 @@ const paginatedResponse = (result, limit, cursorField) => {
 
 const PRODUCT_TYPES = ["product", "service", "medicine"];
 
+// Payment modes available for collecting money against an invoice
+// (initial creation and later due-collection alike).
+const PAYMENT_MODES = ["cash", "bkash", "nagad", "card", "bank_transfer", "others"];
+
 const patientBodySchema = {
   type: "object",
   required: ["name", "gender", "age", "contactNumber"],
@@ -160,6 +164,13 @@ const addInvoiceSchema = {
             paid: { type: "number", minimum: 0, maximum: 10000000 },
           },
         },
+        paymentMode: {
+          type: "string",
+          enum: PAYMENT_MODES,
+          default: "cash",
+          description:
+            "Mode used for the amount paid at invoice creation (cash, bkash, nagad, card, bank_transfer, others)",
+        },
       },
     },
   },
@@ -176,6 +187,35 @@ const patientInfoSchema = {
       additionalProperties: false,
       properties: {
         patient: patientBodySchema,
+      },
+    },
+  },
+};
+
+const collectDueSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Collect a payment (partial or full) against the due amount on an invoice",
+    params: invoiceIdParamSchema,
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        // Optional — omitting it (or the whole body) collects the full due amount,
+        // preserving the old behaviour. When provided, it is still re-validated
+        // and clamped server-side against the invoice's actual due amount.
+        amount: {
+          type: "number",
+          exclusiveMinimum: 0,
+          maximum: 10000000,
+          description: "Amount to collect now. Must be > 0 and <= the invoice's current due amount.",
+        },
+        paymentMode: {
+          type: "string",
+          enum: PAYMENT_MODES,
+          default: "cash",
+          description: "Mode used for this due collection",
+        },
       },
     },
   },
@@ -238,7 +278,7 @@ async function invoiceRoutes(fastify) {
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
-      const { patient, referrer, tests, products = [], amount } = req.body;
+      const { patient, referrer, tests, products = [], amount, paymentMode = "cash" } = req.body;
 
       if (amount.paid > amount.final) {
         return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
@@ -300,7 +340,7 @@ async function invoiceRoutes(fastify) {
       // ── Insert invoice ──────────────────────────────────────────────────
       await col().insertOne({
         labId: labId(req),
-        labKey: String (req.user.labKey),
+        labKey: String(req.user.labKey),
         invoiceId,
         createdAt: Date.now(),
         expiresAt: new Date(Date.now() + 60 * 60 * 24 * 180 * 1000),
@@ -340,6 +380,7 @@ async function invoiceRoutes(fastify) {
           net: amount.net,
           paid: amount.paid,
         },
+        paymentMode,
         createdBy: {
           id: userId(req),
           name: req.user.name,
@@ -350,7 +391,7 @@ async function invoiceRoutes(fastify) {
         },
         collections:
           amount.paid > 0
-            ? [{ by: { id: userId(req), name: req.user.name }, amount: amount.paid, at: Date.now() }]
+            ? [{ by: { id: userId(req), name: req.user.name }, amount: amount.paid, mode: paymentMode, at: Date.now() }]
             : [],
         deletion: {
           status: false,
@@ -438,6 +479,7 @@ async function invoiceRoutes(fastify) {
               "amount.final": 1,
               "amount.paid": 1,
               "tests.schemaId": 1,
+              paymentMode: 1,
             },
           })
           .sort({ createdAt: -1 })
@@ -453,50 +495,63 @@ async function invoiceRoutes(fastify) {
   );
 
   // ── PATCH /invoice/:invoiceId/collect-due ─────────────────────────────────
-  fastify.patch(
-    "/invoice/:invoiceId/collect-due",
-    {
-      schema: {
-        tags: ["Invoices"],
-        summary: "Collect the remaining due amount on an invoice",
-        params: invoiceIdParamSchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const { invoiceId } = req.params;
+  // Collects a payment against the outstanding due amount. The amount is
+  // optional — omit it to collect the full due (old behaviour) — but whatever
+  // is sent is always re-derived and clamped server-side against the
+  // invoice's *current* due, never trusting the client's number as-is:
+  //   - never negative (schema requires > 0; also floored at 0 defensively)
+  //   - never more than the actual due amount at the moment of the update
+  fastify.patch("/invoice/:invoiceId/collect-due", collectDueSchema, async (req, reply) => {
+    try {
+      const { invoiceId } = req.params;
+      const paymentMode = req.body?.paymentMode || "cash";
 
-        const invoice = await col().findOne(
-          { invoiceId, labId: labId(req) },
-          { projection: { "amount.final": 1, "amount.paid": 1 } },
-        );
-        if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      const invoice = await col().findOne(
+        { invoiceId, labId: labId(req) },
+        { projection: { "amount.final": 1, "amount.paid": 1 } },
+      );
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-        const due = invoice.amount.final - invoice.amount.paid;
-        if (due <= 0) return reply.code(400).send({ error: "Invoice already fully paid" });
+      const due = Math.max(0, invoice.amount.final - invoice.amount.paid);
+      if (due <= 0) return reply.code(400).send({ error: "Invoice already fully paid" });
 
-        const result = await col().updateOne(
-          { invoiceId, labId: labId(req) },
-          {
-            $set: { "amount.paid": invoice.amount.final },
-            $push: {
-              collections: {
-                by: { id: userId(req), name: req.user.name },
-                amount: due,
-                at: Date.now(),
-              },
+      // Requested amount defaults to the full due; always clamped to (0, due].
+      const requested = req.body?.amount != null ? Number(req.body.amount) : due;
+      if (!Number.isFinite(requested) || requested <= 0) {
+        return reply.code(400).send({ error: "Amount to collect must be a positive number" });
+      }
+      const collectAmount = Math.round(Math.min(requested, due) * 100) / 100;
+
+      const newPaid = Math.min(invoice.amount.final, invoice.amount.paid + collectAmount);
+
+      const result = await col().updateOne(
+        { invoiceId, labId: labId(req) },
+        {
+          $set: { "amount.paid": newPaid },
+          $push: {
+            collections: {
+              by: { id: userId(req), name: req.user.name },
+              amount: collectAmount,
+              mode: paymentMode,
+              at: Date.now(),
             },
           },
-        );
-        if (result.modifiedCount === 0) return reply.code(400).send({ error: "Nothing to update" });
+        },
+      );
+      if (result.modifiedCount === 0) return reply.code(400).send({ error: "Nothing to update" });
 
-        return reply.send({ success: true, paid: invoice.amount.final });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to collect due amount" });
-      }
-    },
-  );
+      return reply.send({
+        success: true,
+        collected: collectAmount,
+        paid: newPaid,
+        due: Math.max(0, invoice.amount.final - newPaid),
+        paymentMode,
+      });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to collect due amount" });
+    }
+  });
 
   // ── GET /invoice/all ──────────────────────────────────────────────────────
   fastify.get(
@@ -534,6 +589,7 @@ async function invoiceRoutes(fastify) {
                 "amount.final": 1,
                 "amount.paid": 1,
                 "tests.schemaId": 1,
+                paymentMode: 1,
               },
             },
           )
@@ -584,6 +640,7 @@ async function invoiceRoutes(fastify) {
                 "amount.final": 1,
                 "amount.paid": 1,
                 "tests.schemaId": 1,
+                paymentMode: 1,
               },
             },
           )
@@ -656,6 +713,7 @@ async function invoiceRoutes(fastify) {
               "tests.isCompleted": 1,
               "tests.report.sampleCollectionDate": 1,
               "tests.report.reportDate": 1,
+              paymentMode: 1,
             },
           },
         );

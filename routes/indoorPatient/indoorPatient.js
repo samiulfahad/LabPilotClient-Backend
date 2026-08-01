@@ -2,10 +2,14 @@
  * indoorPatients.routes.js
  */
 
+import { randomUUID } from "crypto";
 import toObjectId from "../../utils/db.js";
 
 const COLLECTION = "indoorPatients";
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+
+// Mirrors invoiceRoutes.js PAYMENT_MODES
+const PAYMENT_MODES = ["cash", "bkash", "nagad", "card", "bank_transfer", "others"];
 
 // ─── Schema Fragments ─────────────────────────────────────────────────────────
 
@@ -218,7 +222,34 @@ const addPaymentSchema = {
       properties: {
         amount: { type: "number", minimum: 0.01 },
         note: { type: "string", maxLength: 300 },
+        paymentMode: {
+          type: "string",
+          enum: PAYMENT_MODES,
+          default: "cash",
+          description: "Mode used for this payment collection",
+        },
       },
+    },
+  },
+};
+
+const updatePaymentModeSchema = {
+  schema: {
+    tags: ["IndoorPatients"],
+    summary: "Update the payment mode of a specific payment — only the staff member who collected it may edit it",
+    params: {
+      type: "object",
+      required: ["id", "paymentId"],
+      properties: {
+        id: objectIdSchema,
+        paymentId: { type: "string", minLength: 1, maxLength: 100 },
+      },
+    },
+    body: {
+      type: "object",
+      required: ["paymentMode"],
+      additionalProperties: false,
+      properties: { paymentMode: { type: "string", enum: PAYMENT_MODES } },
     },
   },
 };
@@ -516,6 +547,8 @@ async function indoorPatientRoutes(fastify) {
             relation: patient.guardian?.relation?.trim() ?? "",
             contactNumber: patient.guardian?.contactNumber?.trim() ?? "",
           },
+          updatedAt: null,
+          updatedBy: null,
         },
         disease: {
           description: disease?.description?.trim() ?? "",
@@ -573,6 +606,7 @@ async function indoorPatientRoutes(fastify) {
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
       const { patient } = req.body;
 
+      const updatedAt = now();
       const result = await col().updateOne(
         { _id, ...notDeletedFilter(req) },
         {
@@ -588,7 +622,9 @@ async function indoorPatientRoutes(fastify) {
               relation: patient.guardian?.relation?.trim() ?? "",
               contactNumber: patient.guardian?.contactNumber?.trim() ?? "",
             },
-            updated: { at: now(), by: by(req) },
+            "patient.updatedAt": updatedAt,
+            "patient.updatedBy": by(req),
+            updated: { at: updatedAt, by: by(req) },
           },
         },
       );
@@ -952,13 +988,22 @@ async function indoorPatientRoutes(fastify) {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { amount, note } = req.body;
+      const { amount, note, paymentMode = "cash" } = req.body;
 
       const collectedAt = now();
       const result = await col().updateOne(
         { _id, ...notDeletedFilter(req) },
         {
-          $push: { payments: { amount, collectedBy: by(req), collectedAt, note: note ?? "" } },
+          $push: {
+            payments: {
+              paymentId: randomUUID(),
+              amount,
+              mode: paymentMode,
+              collectedBy: by(req),
+              collectedAt,
+              note: note ?? "",
+            },
+          },
           $set: { updated: { at: collectedAt, by: by(req) } },
         },
       );
@@ -968,6 +1013,48 @@ async function indoorPatientRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to record payment" });
+    }
+  });
+
+  // ── PATCH /indoor-patient/:id/payment/:paymentId/mode ───────────────────────
+  // Only the staff member who originally collected the payment may edit its mode.
+  fastify.patch("/indoor-patient/:id/payment/:paymentId/mode", updatePaymentModeSchema, async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+      const { paymentId } = req.params;
+      const { paymentMode } = req.body;
+
+      const admission = await col().findOne({ _id, ...notDeletedFilter(req) }, { projection: { payments: 1 } });
+      if (!admission) return reply.code(404).send({ error: "Patient not found" });
+
+      const payment = (admission.payments ?? []).find((p) => p.paymentId === paymentId);
+      if (!payment) return reply.code(404).send({ error: "Payment not found" });
+
+      if (payment.collectedBy?.id?.toString() !== req.user.id) {
+        return reply.code(403).send({ error: "Only the staff member who collected this payment can edit its mode" });
+      }
+
+      if (payment.mode === paymentMode) return reply.send({ success: true });
+
+      const updatedAt = now();
+      await col().updateOne(
+        { _id, ...notDeletedFilter(req) },
+        {
+          $set: {
+            "payments.$[p].mode": paymentMode,
+            "payments.$[p].modeUpdatedAt": updatedAt,
+            "payments.$[p].modeUpdatedBy": by(req),
+            updated: { at: updatedAt, by: by(req) },
+          },
+        },
+        { arrayFilters: [{ "p.paymentId": paymentId }] },
+      );
+
+      return reply.send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to update payment mode" });
     }
   });
 

@@ -1,6 +1,62 @@
 import toObjectId from "../../utils/db.js";
 import { computeTotalBilled, computeTotalDiscounts, computeTotalPayments } from "../../utils/ipdBilling.js";
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const PAYMENT_MODE_KEYS = ["cash", "bkash", "nagad", "card", "bank_transfer", "others"];
+
+// Parses & validates startDate/endDate query params shared by every route
+// below. Sends a 400 and returns null if invalid, so callers can just
+// `const range = parseDateRange(req, reply); if (!range) return;`
+const parseDateRange = (req, reply) => {
+  const startDate = parseInt(req.query.startDate);
+  const endDate = parseInt(req.query.endDate);
+
+  if (Number.isNaN(startDate) || Number.isNaN(endDate)) {
+    reply.code(400).send({ error: "startDate and endDate must be valid Unix timestamps (ms)" });
+    return null;
+  }
+  if (startDate > endDate) {
+    reply.code(400).send({ error: "startDate must be before endDate" });
+    return null;
+  }
+  return { startDate, endDate };
+};
+
+// Flattens a Mongo group-by-mode aggregation result into the fixed-shape
+// object the client expects — every PAYMENT_MODE_KEYS entry present, modes
+// with no activity in range come back as 0. Shared by /cashmemo/summary and
+// /cashmemo/ipd-summary.
+const buildPaymentModeBreakdown = (rows) => {
+  const breakdown = Object.fromEntries(PAYMENT_MODE_KEYS.map((k) => [k, 0]));
+  for (const row of rows) {
+    if (row._id && Object.prototype.hasOwnProperty.call(breakdown, row._id)) {
+      breakdown[row._id] = Math.round(row.total);
+    }
+  }
+  return breakdown;
+};
+
+const EMPTY_PAYMENT_MODE_BREAKDOWN = () => Object.fromEntries(PAYMENT_MODE_KEYS.map((k) => [k, 0]));
+
+// Zeroed IPD summary shape returned for diagnosticCenter labs (no IPD module).
+// Kept as one object so it can't drift out of sync with the real response shape.
+const EMPTY_IPD_SUMMARY = () => ({
+  currentlyAdmitted: 0,
+  admittedCount: 0,
+  releasedCount: 0,
+  avgStayDays: 0,
+  totalBilled: 0,
+  categoryBreakdown: { test: 0, medicine: 0, product: 0, other: 0 },
+  totalDiscounts: 0,
+  discountCount: 0,
+  discountPatientCount: 0,
+  totalCollected: 0,
+  deletedCount: 0,
+  totalAmountDeleted: 0,
+  paymentModeBreakdown: EMPTY_PAYMENT_MODE_BREAKDOWN(),
+});
+
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const summaryQuerySchema = {
@@ -136,7 +192,7 @@ const expenseSummaryQuerySchema = {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function cashmemoRoutes(fastify) {
-  const col = () => fastify.mongo.db.collection("invoices");
+  const invoicesCol = () => fastify.mongo.db.collection("invoices");
   const ipdCol = () => fastify.mongo.db.collection("indoorPatients");
   const expenseCol = () => fastify.mongo.db.collection("expenses");
   const labId = (req) => toObjectId(req.user.labId);
@@ -171,16 +227,22 @@ async function cashmemoRoutes(fastify) {
   // This mirrors the IPD deletedFilter pattern and matches what the
   // /cashmemo/outdoor-deleted-invoices drill-down already does, so the header
   // count and the drill-down list never disagree.
+  //
+  // paymentModeBreakdown is scoped by collections.at in range (NOT createdAt
+  // either) — same "activity-based" convention as the deletion figures and
+  // the IPD payments/discounts aggregations below: a due collected today in
+  // a given mode counts toward today's breakdown even if the invoice itself
+  // was created earlier. Only non-deleted invoices contribute, matching the
+  // rest of the active figures.
   fastify.get("/cashmemo/summary", summaryQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
-
-      const [activeResult, deletedResult] = await Promise.all([
+      const [activeResult, deletedResult, paymentModeResult] = await Promise.all([
         // ── Active invoices created in range ──────────────────────────────
-        col()
+        invoicesCol()
           .aggregate(
             [
               {
@@ -201,9 +263,6 @@ async function cashmemoRoutes(fastify) {
                   totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
                   totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                   totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
-                  fullyPaidCount: {
-                    $sum: { $cond: [{ $gte: ["$amount.paid", "$amount.final"] }, 1, 0] },
-                  },
                 },
               },
               {
@@ -218,7 +277,6 @@ async function cashmemoRoutes(fastify) {
                   totalNet: 1,
                   totalPaid: 1,
                   totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
-                  fullyPaidCount: 1,
                 },
               },
             ],
@@ -227,7 +285,7 @@ async function cashmemoRoutes(fastify) {
           .toArray(),
 
         // ── Deleted invoices, scoped by deletion.at (NOT createdAt) ───────
-        col()
+        invoicesCol()
           .aggregate(
             [
               {
@@ -249,6 +307,26 @@ async function cashmemoRoutes(fastify) {
             { allowDiskUse: true },
           )
           .toArray(),
+
+        // ── Payment-mode breakdown — money actually collected in range ────
+        // Scoped by collections.at (when the payment happened), not the
+        // invoice's createdAt. Only non-deleted invoices contribute.
+        invoicesCol()
+          .aggregate(
+            [
+              { $match: { labId: labId(req), "deletion.status": false } },
+              { $unwind: "$collections" },
+              { $match: { "collections.at": { $gte: startDate, $lte: endDate } } },
+              {
+                $group: {
+                  _id: "$collections.mode",
+                  total: { $sum: "$collections.amount" },
+                },
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
       ]);
 
       const active = activeResult[0] ?? {
@@ -261,13 +339,13 @@ async function cashmemoRoutes(fastify) {
         totalNet: 0,
         totalPaid: 0,
         totalDue: 0,
-        fullyPaidCount: 0,
       };
 
       return reply.send({
         ...active,
         deletedCount: deletedResult[0]?.deletedCount ?? 0,
         totalAmountDeleted: deletedResult[0]?.totalAmountDeleted ?? 0,
+        paymentModeBreakdown: buildPaymentModeBreakdown(paymentModeResult),
       });
     } catch (err) {
       req.log.error(err);
@@ -283,12 +361,11 @@ async function cashmemoRoutes(fastify) {
   // Mirrors the IPD deleted-patients endpoint but against the invoices collection.
   fastify.get("/cashmemo/outdoor-deleted-invoices", outdoorDeletedInvoicesQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
-
-      const invoices = await col()
+      const invoices = await invoicesCol()
         .find(
           {
             labId: labId(req),
@@ -320,11 +397,17 @@ async function cashmemoRoutes(fastify) {
   // Revenue-cycle view for IPD, built around the metrics an actual hospital
   // finance dashboard tracks: current census, patient flow (admissions/
   // discharges), average length of stay, billed vs. collected vs. due,
-  // collection rate, revenue mix by category, and soft-deleted admissions.
+  // collection rate, revenue mix by category, payment-mode breakdown, and
+  // soft-deleted admissions.
   //
   //   revenue figures  → activity-based: expenses/discounts/payments whose
   //                      own timestamp (addedAt/appliedAt/collectedAt) falls
   //                      in [startDate, endDate]
+  //   paymentModeBreakdown → same activity-based convention, scoped by
+  //                      payments.collectedAt in range. Mirrors the outdoor
+  //                      /cashmemo/summary paymentModeBreakdown exactly, just
+  //                      sourced from indoorPatients.payments instead of
+  //                      invoices.collections.
   //   admitted/released/ALOS → based on admittedAt/releasedAt in range
   //   currentlyAdmitted       → real-time census, NOT date-bound
   //   deletedCount/totalAmountDeleted → based on deletion.at in range (NOT
@@ -334,7 +417,7 @@ async function cashmemoRoutes(fastify) {
   // All aggregations/queries below (except the deleted one, which is the
   // mirror-image) are scoped to non-deleted patients only (notDeletedFilter),
   // so a soft-deleted admission never contributes to billed/collected/
-  // discount/census/flow figures.
+  // discount/census/flow/paymentMode figures.
   //
   // NOTE: totalBilled reflects itemized expenses only (test/medicine/product/
   // service/other) — bed charges accrue daily rather than as dated ledger
@@ -346,209 +429,218 @@ async function cashmemoRoutes(fastify) {
   // touching the indoorPatients collection for them.
   fastify.get("/cashmemo/ipd-summary", ipdSummaryQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       if (!isHospital(req)) {
-        return reply.send({
-          currentlyAdmitted: 0,
-          admittedCount: 0,
-          releasedCount: 0,
-          avgStayDays: 0,
-          totalBilled: 0,
-          expensePatientCount: 0,
-          categoryBreakdown: { test: 0, medicine: 0, product: 0, other: 0 },
-          totalDiscounts: 0,
-          discountCount: 0,
-          discountPatientCount: 0,
-          totalCollected: 0,
-          totalDue: 0,
-          collectionRate: 0,
-          deletedCount: 0,
-          totalAmountDeleted: 0,
-        });
+        return reply.send(EMPTY_IPD_SUMMARY());
       }
 
-      const [expensesResult, discountsResult, paymentsResult, flowResult, currentlyAdmitted, deletedResult] =
-        await Promise.all([
-          // ── Expenses added in range — revenue mix by category ──────────────
-          ipdCol()
-            .aggregate(
-              [
-                { $match: notDeletedFilter(req) },
-                { $unwind: "$expenses" },
-                { $match: { "expenses.addedAt": { $gte: startDate, $lte: endDate } } },
-                {
-                  $group: {
-                    _id: null,
-                    totalBilled: {
-                      $sum: {
-                        $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }],
-                      },
+      const [
+        expensesResult,
+        discountsResult,
+        paymentsResult,
+        paymentModeResult,
+        flowResult,
+        currentlyAdmitted,
+        deletedResult,
+      ] = await Promise.all([
+        // ── Expenses added in range — revenue mix by category ──────────────
+        ipdCol()
+          .aggregate(
+            [
+              { $match: notDeletedFilter(req) },
+              { $unwind: "$expenses" },
+              { $match: { "expenses.addedAt": { $gte: startDate, $lte: endDate } } },
+              {
+                $group: {
+                  _id: null,
+                  totalBilled: {
+                    $sum: {
+                      $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }],
                     },
-                    testAmount: {
-                      $sum: {
-                        $cond: [
-                          { $eq: ["$expenses.type", "test"] },
-                          { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
-                          0,
-                        ],
-                      },
+                  },
+                  testAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "test"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
                     },
-                    medicineAmount: {
-                      $sum: {
-                        $cond: [
-                          { $eq: ["$expenses.type", "medicine"] },
-                          { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
-                          0,
-                        ],
-                      },
+                  },
+                  medicineAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "medicine"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
                     },
-                    productAmount: {
-                      $sum: {
-                        $cond: [
-                          { $eq: ["$expenses.type", "product"] },
-                          { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
-                          0,
-                        ],
-                      },
+                  },
+                  productAmount: {
+                    $sum: {
+                      $cond: [
+                        { $eq: ["$expenses.type", "product"] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
                     },
-                    otherAmount: {
-                      $sum: {
-                        $cond: [
-                          { $in: ["$expenses.type", ["service", "other"]] },
-                          { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
-                          0,
-                        ],
-                      },
+                  },
+                  otherAmount: {
+                    $sum: {
+                      $cond: [
+                        { $in: ["$expenses.type", ["service", "other"]] },
+                        { $ifNull: ["$expenses.total", { $multiply: ["$expenses.price", "$expenses.quantity"] }] },
+                        0,
+                      ],
                     },
-                    expensePatientIds: { $addToSet: "$_id" },
                   },
                 },
-                {
-                  $project: {
-                    _id: 0,
-                    totalBilled: 1,
-                    testAmount: 1,
-                    medicineAmount: 1,
-                    productAmount: 1,
-                    otherAmount: 1,
-                    expensePatientCount: { $size: "$expensePatientIds" },
-                  },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  totalBilled: 1,
+                  testAmount: 1,
+                  medicineAmount: 1,
+                  productAmount: 1,
+                  otherAmount: 1,
                 },
-              ],
-              { allowDiskUse: true },
-            )
-            .toArray(),
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
 
-          // ── Discounts applied in range ────────────────────────────────────────
-          ipdCol()
-            .aggregate(
-              [
-                { $match: notDeletedFilter(req) },
-                { $unwind: "$discounts" },
-                { $match: { "discounts.appliedAt": { $gte: startDate, $lte: endDate } } },
-                {
-                  $group: {
-                    _id: null,
-                    totalDiscounts: { $sum: "$discounts.amount" },
-                    discountCount: { $sum: 1 },
-                    discountPatientIds: { $addToSet: "$_id" },
-                  },
+        // ── Discounts applied in range ────────────────────────────────────────
+        ipdCol()
+          .aggregate(
+            [
+              { $match: notDeletedFilter(req) },
+              { $unwind: "$discounts" },
+              { $match: { "discounts.appliedAt": { $gte: startDate, $lte: endDate } } },
+              {
+                $group: {
+                  _id: null,
+                  totalDiscounts: { $sum: "$discounts.amount" },
+                  discountCount: { $sum: 1 },
+                  discountPatientIds: { $addToSet: "$_id" },
                 },
-                {
-                  $project: {
-                    _id: 0,
-                    totalDiscounts: 1,
-                    discountCount: 1,
-                    discountPatientCount: { $size: "$discountPatientIds" },
-                  },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  totalDiscounts: 1,
+                  discountCount: 1,
+                  discountPatientCount: { $size: "$discountPatientIds" },
                 },
-              ],
-              { allowDiskUse: true },
-            )
-            .toArray(),
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
 
-          // ── Payments collected in range ──────────────────────────────────────
-          ipdCol()
-            .aggregate(
-              [
-                { $match: notDeletedFilter(req) },
-                { $unwind: "$payments" },
-                { $match: { "payments.collectedAt": { $gte: startDate, $lte: endDate } } },
-                {
-                  $group: {
-                    _id: null,
-                    totalCollected: { $sum: "$payments.amount" },
-                    paymentCount: { $sum: 1 },
-                  },
+        // ── Payments collected in range ──────────────────────────────────────
+        ipdCol()
+          .aggregate(
+            [
+              { $match: notDeletedFilter(req) },
+              { $unwind: "$payments" },
+              { $match: { "payments.collectedAt": { $gte: startDate, $lte: endDate } } },
+              {
+                $group: {
+                  _id: null,
+                  totalCollected: { $sum: "$payments.amount" },
+                  paymentCount: { $sum: 1 },
                 },
-                { $project: { _id: 0, totalCollected: 1, paymentCount: 1 } },
-              ],
-              { allowDiskUse: true },
-            )
-            .toArray(),
+              },
+              { $project: { _id: 0, totalCollected: 1, paymentCount: 1 } },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
 
-          // ── Patient flow: admitted / released in range, + ALOS for releases ──
-          ipdCol()
-            .aggregate(
-              [
-                { $match: notDeletedFilter(req) },
-                {
-                  $facet: {
-                    admitted: [{ $match: { admittedAt: { $gte: startDate, $lte: endDate } } }, { $count: "count" }],
-                    released: [
-                      { $match: { releasedAt: { $gte: startDate, $lte: endDate } } },
-                      {
-                        $project: {
-                          stayDays: { $divide: [{ $subtract: ["$releasedAt", "$admittedAt"] }, 1000 * 60 * 60 * 24] },
-                        },
+        // ── Payment-mode breakdown — money actually collected in range ────
+        // Mirrors the outdoor /cashmemo/summary paymentModeBreakdown pattern:
+        // scoped by payments.collectedAt (activity-based, not admittedAt),
+        // only non-deleted patients contribute.
+        ipdCol()
+          .aggregate(
+            [
+              { $match: notDeletedFilter(req) },
+              { $unwind: "$payments" },
+              { $match: { "payments.collectedAt": { $gte: startDate, $lte: endDate } } },
+              {
+                $group: {
+                  _id: "$payments.mode",
+                  total: { $sum: "$payments.amount" },
+                },
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
+
+        // ── Patient flow: admitted / released in range, + ALOS for releases ──
+        ipdCol()
+          .aggregate(
+            [
+              { $match: notDeletedFilter(req) },
+              {
+                $facet: {
+                  admitted: [{ $match: { admittedAt: { $gte: startDate, $lte: endDate } } }, { $count: "count" }],
+                  released: [
+                    { $match: { releasedAt: { $gte: startDate, $lte: endDate } } },
+                    {
+                      $project: {
+                        stayDays: { $divide: [{ $subtract: ["$releasedAt", "$admittedAt"] }, 1000 * 60 * 60 * 24] },
                       },
-                      { $group: { _id: null, count: { $sum: 1 }, avgStayDays: { $avg: "$stayDays" } } },
-                    ],
-                  },
+                    },
+                    { $group: { _id: null, count: { $sum: 1 }, avgStayDays: { $avg: "$stayDays" } } },
+                  ],
                 },
-              ],
-              { allowDiskUse: true },
-            )
-            .toArray(),
+              },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
 
-          // ── Real-time census — not date-bound ─────────────────────────────────
-          ipdCol().countDocuments({ ...notDeletedFilter(req), status: "admitted" }),
+        // ── Real-time census — not date-bound ─────────────────────────────────
+        ipdCol().countDocuments({ ...notDeletedFilter(req), status: "admitted" }),
 
-          // ── Deleted admissions in range (by deletion.at) — count + billed total ──
-          ipdCol()
-            .aggregate(
-              [
-                { $match: deletedFilter(req, startDate, endDate) },
-                {
-                  $project: {
-                    billed: {
-                      $sum: {
-                        $map: {
-                          input: { $ifNull: ["$expenses", []] },
-                          as: "e",
-                          in: { $ifNull: ["$$e.total", { $multiply: ["$$e.price", "$$e.quantity"] }] },
-                        },
+        // ── Deleted admissions in range (by deletion.at) — count + billed total ──
+        ipdCol()
+          .aggregate(
+            [
+              { $match: deletedFilter(req, startDate, endDate) },
+              {
+                $project: {
+                  billed: {
+                    $sum: {
+                      $map: {
+                        input: { $ifNull: ["$expenses", []] },
+                        as: "e",
+                        in: { $ifNull: ["$$e.total", { $multiply: ["$$e.price", "$$e.quantity"] }] },
                       },
                     },
                   },
                 },
-                {
-                  $group: {
-                    _id: null,
-                    deletedCount: { $sum: 1 },
-                    totalAmountDeleted: { $sum: "$billed" },
-                  },
+              },
+              {
+                $group: {
+                  _id: null,
+                  deletedCount: { $sum: 1 },
+                  totalAmountDeleted: { $sum: "$billed" },
                 },
-                { $project: { _id: 0, deletedCount: 1, totalAmountDeleted: 1 } },
-              ],
-              { allowDiskUse: true },
-            )
-            .toArray(),
-        ]);
+              },
+              { $project: { _id: 0, deletedCount: 1, totalAmountDeleted: 1 } },
+            ],
+            { allowDiskUse: true },
+          )
+          .toArray(),
+      ]);
 
       const expenses = expensesResult[0] ?? {
         totalBilled: 0,
@@ -556,7 +648,6 @@ async function cashmemoRoutes(fastify) {
         medicineAmount: 0,
         productAmount: 0,
         otherAmount: 0,
-        expensePatientCount: 0,
       };
       const discounts = discountsResult[0] ?? { totalDiscounts: 0, discountCount: 0, discountPatientCount: 0 };
       const payments = paymentsResult[0] ?? { totalCollected: 0, paymentCount: 0 };
@@ -568,10 +659,6 @@ async function cashmemoRoutes(fastify) {
       const totalBilled = Math.round(expenses.totalBilled);
       const totalDiscounts = Math.round(discounts.totalDiscounts);
       const totalCollected = Math.round(payments.totalCollected);
-      // Due = bill vs. collection only. Discounts are shown separately and are
-      // never backed out of this figure.
-      const totalDue = Math.max(0, totalBilled - totalCollected);
-      const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 1000) / 10 : 0;
 
       return reply.send({
         currentlyAdmitted,
@@ -579,7 +666,6 @@ async function cashmemoRoutes(fastify) {
         releasedCount,
         avgStayDays: Math.round(avgStayDays * 10) / 10,
         totalBilled,
-        expensePatientCount: expenses.expensePatientCount,
         categoryBreakdown: {
           test: Math.round(expenses.testAmount),
           medicine: Math.round(expenses.medicineAmount),
@@ -590,10 +676,9 @@ async function cashmemoRoutes(fastify) {
         discountCount: discounts.discountCount,
         discountPatientCount: discounts.discountPatientCount,
         totalCollected,
-        totalDue,
-        collectionRate,
         deletedCount: deleted.deletedCount,
         totalAmountDeleted: Math.round(deleted.totalAmountDeleted),
+        paymentModeBreakdown: buildPaymentModeBreakdown(paymentModeResult),
       });
     } catch (err) {
       req.log.error(err);
@@ -609,10 +694,9 @@ async function cashmemoRoutes(fastify) {
   // than querying indoorPatients. Excludes soft-deleted patients.
   fastify.get("/cashmemo/ipd-discount-patients", ipdDiscountPatientsQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       if (!isHospital(req)) return reply.send({ patients: [] });
 
@@ -661,10 +745,9 @@ async function cashmemoRoutes(fastify) {
   // than querying indoorPatients. Excludes soft-deleted patients.
   fastify.get("/cashmemo/ipd-admitted-patients", ipdAdmittedPatientsQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       if (!isHospital(req)) return reply.send({ patients: [] });
 
@@ -701,10 +784,9 @@ async function cashmemoRoutes(fastify) {
   // than querying indoorPatients. Excludes soft-deleted patients.
   fastify.get("/cashmemo/ipd-released-patients", ipdReleasedPatientsQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       if (!isHospital(req)) return reply.send({ patients: [] });
 
@@ -803,10 +885,9 @@ async function cashmemoRoutes(fastify) {
   // than querying indoorPatients.
   fastify.get("/cashmemo/ipd-deleted-patients", ipdDeletedPatientsQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       if (!isHospital(req)) return reply.send({ patients: [] });
 
@@ -855,10 +936,9 @@ async function cashmemoRoutes(fastify) {
   // Applies to both lab types (operational expense isn't gated by IPD).
   fastify.get("/cashmemo/expense-summary", expenseSummaryQuerySchema, async (req, reply) => {
     try {
-      const startDate = parseInt(req.query.startDate);
-      const endDate = parseInt(req.query.endDate);
-
-      if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
+      const range = parseDateRange(req, reply);
+      if (!range) return;
+      const { startDate, endDate } = range;
 
       const [result] = await expenseCol()
         .aggregate(
