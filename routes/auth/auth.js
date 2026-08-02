@@ -38,6 +38,8 @@ async function authRoutes(fastify) {
           "contact.primary": 1,
           "contact.address": 1,
           "contact.publicEmail": 1,
+          feePerInvoive: 1,
+          forceInvoiceFee: 1,
         },
       },
     );
@@ -202,7 +204,6 @@ async function authRoutes(fastify) {
       return reply.code(445).send({ error: "Missing tokens" });
     }
 
-    // ── Step 1: Verify the JWT signature and expiry ────────────────────────
     let decoded;
     try {
       decoded = await fastify.jwt.verify(refreshToken, { key: fastify.REFRESH_SECRET });
@@ -221,10 +222,6 @@ async function authRoutes(fastify) {
       maxLabAdjustment: decoded.maxLabAdjustment ?? 0,
     };
 
-    // ── Step 2: Confirm the session exists in DB BEFORE signing anything ───
-    // Grace period of 30s handles the race condition where two tabs both
-    // try to refresh simultaneously — the second request arrives just after
-    // the first has already rotated the token.
     const existingSession = await tokensCollection().findOne({
       userId: toObjectId(payload.id),
       labId: toObjectId(payload.labId),
@@ -234,10 +231,6 @@ async function authRoutes(fastify) {
     });
 
     if (!existingSession) {
-      // ── Check if this device refreshed very recently (grace window) ──────
-      // This protects against the multi-tab race condition:
-      // Tab A rotates the token → Tab B fires with the old token within 30s
-      // → we allow it by issuing a new token from the still-valid session.
       const recentSession = await tokensCollection().findOne({
         userId: toObjectId(payload.id),
         labId: toObjectId(payload.labId),
@@ -250,7 +243,6 @@ async function authRoutes(fastify) {
         return reply.code(445).send({ error: "Session expired or revoked" });
       }
 
-      // Session was rotated very recently — issue a new token from it
       const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
         key: fastify.REFRESH_SECRET,
         expiresIn: fastify.REFRESH_EXPIRY,
@@ -272,7 +264,6 @@ async function authRoutes(fastify) {
       return { accessToken: newAccessToken };
     }
 
-    // ── Step 3: Session confirmed — now sign new tokens ────────────────────
     const newRefreshTokenPlain = await fastify.jwt.sign(payload, {
       key: fastify.REFRESH_SECRET,
       expiresIn: fastify.REFRESH_EXPIRY,

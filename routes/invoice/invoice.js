@@ -1,8 +1,95 @@
 import toObjectId from "../../utils/db.js";
 import generateInvoiceId from "../../utils/generateInvoiceId.js";
 
+/**
+ * ── Invoice document structure (as stored in "invoices" collection) ─────────
+ *
+ * {
+ *   _id: ObjectId,
+ *   labId: ObjectId,
+ *   labKey: string,                      // e.g. "1111"
+ *   invoiceId: string,                   // e.g. "ABC1234" (3 letters excl. O + 4 non-zero digits)
+ *   createdAt: number,                   // epoch ms
+ *   expiresAt: Date,                     // createdAt + 180 days (TTL-style field)
+ *
+ *   patient: {
+ *     name: string,
+ *     gender: "male" | "female",
+ *     age: number,
+ *     contactNumber: string,
+ *   },
+ *
+ *   referrer: {
+ *     id: ObjectId | null,
+ *     name: string | null,
+ *     type: string | null,               // e.g. "doctor", "agent", "clinic"
+ *   },
+ *
+ *   tests: [{
+ *     testId: ObjectId,
+ *     name: string,
+ *     price: number,
+ *     schemaId: ObjectId | null,
+ *     // present only when schemaId is set:
+ *     report?: object,
+ *     isCompleted?: boolean,
+ *   }],
+ *
+ *   products: [{
+ *     productId: ObjectId,
+ *     name: string,
+ *     price: number,
+ *     quantity: number,
+ *     type: "product" | "service" | "medicine",
+ *   }],
+ *
+ *   amount: {
+ *     initial: number,                   // tests + products subtotal
+ *     referrerDiscount: number,
+ *     referrerCommission: number,
+ *     labAdjustment: number,
+ *     invoiceFee: number,                // lab's online invoice fee, if applied — added to the patient's total
+ *     final: number,                     // initial - referrerDiscount - labAdjustment + invoiceFee
+ *     net: number,                       // final - referrerCommission
+ *     paid: number,
+ *   },
+ *
+ *   paymentMode: "cash" | "bkash" | "nagad" | "card" | "bank_transfer" | "others",
+ *   isOnlineFeePaid: boolean,            // whether the lab's invoiceFee was applied to this invoice
+ *
+ *   createdBy: { id: ObjectId, name: string },
+ *
+ *   delivery: {
+ *     status: boolean,
+ *     by: { id: ObjectId, name: string },
+ *   },
+ *
+ *   collections: [{                      // payment history (initial payment + later due collections)
+ *     by: { id: ObjectId, name: string },
+ *     amount: number,
+ *     mode: string,                      // one of PAYMENT_MODES
+ *     at: number,                        // epoch ms
+ *   }],
+ *
+ *   deletion: {
+ *     status: boolean,
+ *     at: number | null,
+ *     by: { id: ObjectId, name: string } | { id: null, name: null },
+ *   },
+ *
+ *   // set only by PATCH /invoice/:invoiceId/patient-info:
+ *   updated?: {
+ *     at: number,
+ *     by: { id: ObjectId, name: string },
+ *   },
+ * }
+ * ──────────────────────────────────────────────────────────────────────────
+ */
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const getNestedField = (obj, path) => path.split(".").reduce((o, k) => o?.[k], obj);
+
+const round2 = (n) => Math.round(n * 100) / 100;
 
 const buildCursorFilter = ({ cursor, startDate, endDate, field = "createdAt" }) => {
   const range = {};
@@ -162,6 +249,13 @@ const addInvoiceSchema = {
             final: { type: "number", minimum: 0, maximum: 10000000 },
             net: { type: "number", minimum: 0, maximum: 10000000 },
             paid: { type: "number", minimum: 0, maximum: 10000000 },
+            invoiceFee: {
+              type: "number",
+              minimum: 0,
+              maximum: 10000000,
+              default: 0,
+              description: "Online invoice fee applied to this invoice, if any — added to the patient's total",
+            },
           },
         },
         paymentMode: {
@@ -170,6 +264,11 @@ const addInvoiceSchema = {
           default: "cash",
           description:
             "Mode used for the amount paid at invoice creation (cash, bkash, nagad, card, bank_transfer, others)",
+        },
+        isOnlineFeePaid: {
+          type: "boolean",
+          default: false,
+          description: "Whether the lab's online invoice fee was applied and paid on this invoice",
         },
       },
     },
@@ -278,7 +377,15 @@ async function invoiceRoutes(fastify) {
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
-      const { patient, referrer, tests, products = [], amount, paymentMode = "cash" } = req.body;
+      const {
+        patient,
+        referrer,
+        tests,
+        products = [],
+        amount,
+        paymentMode = "cash",
+        isOnlineFeePaid = false,
+      } = req.body;
 
       if (amount.paid > amount.final) {
         return reply.code(400).send({ error: "Paid amount cannot exceed final amount" });
@@ -296,6 +403,34 @@ async function invoiceRoutes(fastify) {
           error:
             "Your account has an overdue bill. Please clear your outstanding balance to continue creating invoices.",
         });
+      }
+
+      // ── Validate the online invoice fee against the lab's own config ────
+      // Prevents a client from sending isOnlineFeePaid:false / invoiceFee:0
+      // on a lab where forceInvoiceFee is on, or an arbitrary invoiceFee
+      // value that doesn't match what the lab is actually configured for.
+      const lab = await fastify.mongo.db
+        .collection("labs")
+        .findOne({ _id: labId(req) }, { projection: { feePerInvoive: 1, forceInvoiceFee: 1 } });
+
+      const configuredFee = lab?.feePerInvoive || 0;
+      const feeForced = !!lab?.forceInvoiceFee;
+      const expectedFeeApplied = feeForced ? configuredFee > 0 : isOnlineFeePaid;
+      const expectedFee = expectedFeeApplied ? configuredFee : 0;
+
+      if (Math.round((amount.invoiceFee || 0) * 100) !== Math.round(expectedFee * 100)) {
+        return reply.code(400).send({ error: "Invoice fee does not match the lab's configured fee" });
+      }
+
+      // The fee is added on top of the patient's total when applied.
+      // `final` must equal initial - referrerDiscount - labAdjustment + fee.
+      const expectedFinal = Math.max(
+        0,
+        round2(amount.initial - amount.referrerDiscount - amount.labAdjustment + expectedFee),
+      );
+
+      if (Math.round(amount.final * 100) !== Math.round(expectedFinal * 100)) {
+        return reply.code(400).send({ error: "Total amount does not match expected calculation" });
       }
 
       // ── Validate stock upfront ──────────────────────────────────────────
@@ -379,8 +514,10 @@ async function invoiceRoutes(fastify) {
           final: amount.final,
           net: amount.net,
           paid: amount.paid,
+          invoiceFee: amount.invoiceFee || 0,
         },
         paymentMode,
+        isOnlineFeePaid: expectedFeeApplied,
         createdBy: {
           id: userId(req),
           name: req.user.name,
