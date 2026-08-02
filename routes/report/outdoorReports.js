@@ -9,6 +9,7 @@ async function outdoorReportRoutes(fastify, options) {
 
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
+
   // ============================================================================
   // POST /report/add
   // Body: { report, invoiceId, testId }
@@ -155,6 +156,11 @@ async function outdoorReportRoutes(fastify, options) {
         return reply.code(404).send({ error: "Test not found in this invoice" });
       }
 
+      // Parity with indoor-report/dates — offline tests (no schemaId) don't support report dates
+      if (!invoice.tests[testIndex].schemaId) {
+        return reply.code(400).send({ error: "This test is offline and does not support report dates" });
+      }
+
       const dateFields = {};
       if (sampleCollectionDate !== undefined) {
         dateFields[`tests.${testIndex}.report.sampleCollectionDate`] = sampleCollectionDate;
@@ -215,47 +221,6 @@ async function outdoorReportRoutes(fastify, options) {
       return reply.code(500).send({ error: "Failed to fetch report" });
     }
   });
-
-  // Marked for Deletion
-  // ============================================================================
-  // GET /report/all
-  // ============================================================================
-  // fastify.get("/report/all", async (req, reply) => {
-  //   try {
-  //     const invoices = await invoicesCollection()
-  //       .aggregate([
-  //         { $match: { labId: labId(req), "tests.isCompleted": true } },
-  //         { $unwind: { path: "$tests", includeArrayIndex: "testIndex" } },
-  //         { $match: { "tests.isCompleted": true } },
-  //         {
-  //           $project: {
-  //             _id: 0,
-  //             invoiceId: 1,
-  //             patientName: "$patient.name",
-  //             patientGender: "$patient.gender",
-  //             patientAge: "$patient.age",
-  //             contactNumber: "$patient.contactNumber",
-  //             testId: "$tests.testId",
-  //             testName: "$tests.name",
-  //             schemaId: "$tests.schemaId",
-  //             report: "$tests.report",
-  //             isCompleted: "$tests.isCompleted",
-  //             completedAt: "$tests.completedAt",
-  //             completedBy: "$tests.completedBy",
-  //             updatedAt: "$tests.updatedAt",
-  //             updatedBy: "$tests.updatedBy",
-  //           },
-  //         },
-  //         { $sort: { completedAt: -1 } },
-  //       ])
-  //       .toArray();
-
-  //     return reply.send(invoices);
-  //   } catch (error) {
-  //     req.log.error(error);
-  //     return reply.code(500).send({ error: "Failed to fetch reports" });
-  //   }
-  // });
 }
 
 export default outdoorReportRoutes;

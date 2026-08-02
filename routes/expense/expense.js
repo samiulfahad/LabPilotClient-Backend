@@ -328,21 +328,6 @@ async function expenseRoutes(fastify) {
       }
     },
   );
-
-  // ── GET /expense/:expenseId ───────────────────────────────────────────────
-  fastify.get("/expense/:expenseId", expenseIdSchema, async (req, reply) => {
-    try {
-      const expense = await col().findOne({
-        _id: toObjectId(req.params.expenseId),
-        labId: labId(req),
-      });
-      if (!expense) return reply.code(404).send({ error: "Expense not found" });
-      return reply.send(expense);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch expense" });
-    }
-  });
 }
 
 export default expenseRoutes;

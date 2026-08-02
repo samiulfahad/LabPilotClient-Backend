@@ -22,7 +22,7 @@ async function authRoutes(fastify) {
     }
 
     const staff = await staffsCollection().findOne({ labKey: String(labKey).trim(), phone });
-    if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.isDeleted || !staff.isActive) {
+    if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.deletion?.status || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
@@ -38,8 +38,8 @@ async function authRoutes(fastify) {
           "contact.primary": 1,
           "contact.address": 1,
           "contact.publicEmail": 1,
-          feePerInvoive: 1,
-          forceInvoiceFee: 1,
+          "billing.feePerInvoice": 1,
+          "billing.forceInvoiceFee": 1,
         },
       },
     );
@@ -123,7 +123,7 @@ async function authRoutes(fastify) {
 
     const staff = await staffsCollection().findOne({ phone, labKey: normalizedLabKey });
 
-    if (!staff || staff.isDeleted || !staff.isActive) {
+    if (!staff || staff.deletion?.status || !staff.isActive) {
       return reply.send({ message: "If this number is registered, an OTP has been sent." });
     }
 

@@ -246,48 +246,6 @@ async function indoorReportRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to fetch report" });
     }
   });
-
-  // Marked for Deletion
-  // ============================================================================
-  // GET /indoor-report/all
-  // ============================================================================
-  fastify.get("/indoor-report/all", async (req, reply) => {
-    try {
-      const admissions = await col()
-        .aggregate([
-          { $match: { labId: labId(req), "reports.isCompleted": true } },
-          { $unwind: { path: "$reports", includeArrayIndex: "reportIndex" } },
-          { $match: { "reports.isCompleted": true } },
-          {
-            $project: {
-              _id: 0,
-              admissionId: 1,
-              patientName: "$patient.name",
-              patientGender: "$patient.gender",
-              patientAge: "$patient.age",
-              contactNumber: "$patient.contactNumber",
-              testId: "$reports.testId",
-              testName: "$reports.name",
-              schemaId: "$reports.schemaId",
-              report: "$reports.report",
-              isCompleted: "$reports.isCompleted",
-              completedAt: "$reports.completedAt",
-              completedBy: "$reports.completedBy",
-              updatedAt: "$reports.updatedAt",
-              updatedBy: "$reports.updatedBy",
-              addedAt: "$reports.addedAt",
-            },
-          },
-          { $sort: { completedAt: -1 } },
-        ])
-        .toArray();
-
-      return reply.send(admissions);
-    } catch (error) {
-      req.log.error(error);
-      return reply.code(500).send({ error: "Failed to fetch reports" });
-    }
-  });
 }
 
 export default indoorReportRoutes;

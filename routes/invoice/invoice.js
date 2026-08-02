@@ -48,7 +48,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *     referrerDiscount: number,
  *     referrerCommission: number,
  *     labAdjustment: number,
- *     invoiceFee: number,                // lab's online invoice fee, if applied — added to the patient's total
+ *     invoiceFee: number,                // lab.billing.feePerInvoice, if applied — added to the patient's total
  *     final: number,                     // initial - referrerDiscount - labAdjustment + invoiceFee
  *     net: number,                       // final - referrerCommission
  *     paid: number,
@@ -56,6 +56,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *
  *   paymentMode: "cash" | "bkash" | "nagad" | "card" | "bank_transfer" | "others",
  *   isOnlineFeePaid: boolean,            // whether the lab's invoiceFee was applied to this invoice
+ *   onlineFeePaidBy: "lab" | "patient",  // which backend processed the fee — THIS route only accepts "lab"; "patient" is a separate backend
  *
  *   createdBy: { id: ObjectId, name: string },
  *
@@ -270,6 +271,13 @@ const addInvoiceSchema = {
           default: false,
           description: "Whether the lab's online invoice fee was applied and paid on this invoice",
         },
+        onlineFeePaidBy: {
+          type: "string",
+          enum: ["lab", "patient"],
+          default: "lab",
+          description:
+            "Which backend processed the fee payment. This route only supports 'lab' — 'patient' is handled by a separate backend/service and is rejected here.",
+        },
       },
     },
   },
@@ -385,6 +393,7 @@ async function invoiceRoutes(fastify) {
         amount,
         paymentMode = "cash",
         isOnlineFeePaid = false,
+        onlineFeePaidBy = "lab",
       } = req.body;
 
       if (amount.paid > amount.final) {
@@ -394,6 +403,14 @@ async function invoiceRoutes(fastify) {
       // ── At least one test or product required ───────────────────────────
       if (!tests.length && !products.length) {
         return reply.code(400).send({ error: "At least one test or product is required" });
+      }
+
+      // ── This backend only handles the "lab" fee-payment path ────────────
+      // Patient-paid online fees go through a separate backend/service.
+      if (onlineFeePaidBy !== "lab") {
+        return reply.code(400).send({
+          error: "This endpoint only supports the lab fee-payment backend. Patient-paid fees use a different service.",
+        });
       }
 
       // ── Billing guard ───────────────────────────────────────────────────
@@ -411,10 +428,10 @@ async function invoiceRoutes(fastify) {
       // value that doesn't match what the lab is actually configured for.
       const lab = await fastify.mongo.db
         .collection("labs")
-        .findOne({ _id: labId(req) }, { projection: { feePerInvoive: 1, forceInvoiceFee: 1 } });
+        .findOne({ _id: labId(req) }, { projection: { "billing.feePerInvoice": 1, "billing.forceInvoiceFee": 1 } });
 
-      const configuredFee = lab?.feePerInvoive || 0;
-      const feeForced = !!lab?.forceInvoiceFee;
+      const configuredFee = lab?.billing?.feePerInvoice || 0;
+      const feeForced = !!lab?.billing?.forceInvoiceFee;
       const expectedFeeApplied = feeForced ? configuredFee > 0 : isOnlineFeePaid;
       const expectedFee = expectedFeeApplied ? configuredFee : 0;
 
@@ -518,6 +535,7 @@ async function invoiceRoutes(fastify) {
         },
         paymentMode,
         isOnlineFeePaid: expectedFeeApplied,
+        onlineFeePaidBy,
         createdBy: {
           id: userId(req),
           name: req.user.name,
