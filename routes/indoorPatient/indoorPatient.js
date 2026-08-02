@@ -1,5 +1,24 @@
 /**
  * indoorPatients.routes.js
+ *
+ * Cleanup notes (see audit):
+ *  - patient-info / clinical-notes / transfer-ward / change-doctor previously had
+ *    NO authorize() guard, unlike every other mutating route on this collection.
+ *    Added authorize() checks consistent with the existing pattern. These
+ *    permission keys (editPatientInfo, transferPatientWard, changePatientDoctor)
+ *    must exist in your permissions schema / role editor — add them there before
+ *    deploying, or swap in whatever existing permission key is most appropriate.
+ *  - "bed-charge" discount category previously used `categoryTotal = Infinity`,
+ *    meaning bed-charge discounts had NO upper bound. Fixed to compute the real
+ *    accrued bed total (same day-walk logic used for grand-total), extracted
+ *    into computeBedTotal() to avoid duplicating the loop.
+ *  - GET /indoor-patients (list) intentionally left without a permission gate:
+ *    SearchPatient.jsx and AddItemsToPatient.jsx both depend on it for patient
+ *    lookup flows that aren't gated by the "patientList" permission on the
+ *    frontend. Locking it down to "patientList" would break those flows unless
+ *    all roles that can search/add-items also hold "patientList". Flagging this
+ *    explicitly rather than guessing — revisit once the full permission matrix
+ *    is available.
  */
 
 import { randomUUID } from "crypto";
@@ -321,6 +340,39 @@ const generateAdmissionId = async (col, labId) => {
   throw new Error("Failed to generate unique admission ID after multiple attempts");
 };
 
+// Walks admittedAt..releasedAt (or now, if still admitted) day-by-day in BST,
+// applying the correct chargePerDay for each day based on wardHistory.
+// Shared by the grand-total and bed-charge branches of the discount route so
+// the accrual logic only lives in one place.
+const computeBedTotal = (admission) => {
+  if (admission.dealType !== "regular") return 0;
+
+  const tsBst = (ts) => new Date(ts + 6 * 3600 * 1000).toISOString().slice(0, 10);
+  const startStr = tsBst(admission.admittedAt);
+  const endStr = admission.releasedAt ? tsBst(admission.releasedAt) : tsBst(Date.now());
+  const startD = new Date(startStr + "T00:00:00Z");
+  const endD = new Date(endStr + "T00:00:00Z");
+
+  let total = 0;
+  const cur = new Date(startD);
+  while (cur <= endD) {
+    const d = cur.toISOString().slice(0, 10);
+    let daily = admission.space.chargePerDay;
+    for (const h of admission.wardHistory ?? []) {
+      if (!h.fromDate || !h.toDate) continue;
+      const from = tsBst(h.fromDate);
+      const to = tsBst(h.toDate);
+      if (d >= from && d < to) {
+        daily = h.chargePerDay ?? admission.space.chargePerDay;
+        break;
+      }
+    }
+    total += daily;
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return total;
+};
+
 // ─── Projection: full patient (GET /indoor-patient/:id) ───────────────────────
 // Excludes waivers and bedCharges — both legacy fields never read by the frontend.
 // reports kept: the /ipd/patient/:id/reports page fetches via getPatient().
@@ -369,6 +421,12 @@ async function indoorPatientRoutes(fastify) {
   const requireDelete = { onRequest: [fastify.authorize("deletePatient")] };
   const requireRelease = { onRequest: [fastify.authorize("releasePatient")] };
   const requireDiscount = { onRequest: [fastify.authorize("applyDiscountToPatient")] };
+  // Previously unguarded — added to match the authorization pattern used by every
+  // other mutating route on this collection. Register these permission keys in
+  // the role/permission schema if they don't already exist.
+  const requireEditInfo = { onRequest: [fastify.authorize("editPatientInfo")] };
+  const requireTransferWard = { onRequest: [fastify.authorize("transferPatientWard")] };
+  const requireChangeDoctor = { onRequest: [fastify.authorize("changePatientDoctor")] };
 
   // ── GET /indoor-patients/required-data ──────────────────────────────────────
   fastify.get("/indoor-patients/required-data", getRequiredDataSchema, async (req, reply) => {
@@ -600,220 +658,240 @@ async function indoorPatientRoutes(fastify) {
   });
 
   // ── PATCH /indoor-patient/:id/patient-info ───────────────────────────────────
-  fastify.patch("/indoor-patient/:id/patient-info", updatePatientInfoSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { patient } = req.body;
+  fastify.patch(
+    "/indoor-patient/:id/patient-info",
+    { ...updatePatientInfoSchema, ...requireEditInfo },
+    async (req, reply) => {
+      try {
+        const _id = toObjectId(req.params.id);
+        if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+        const { patient } = req.body;
 
-      const updatedAt = now();
-      const result = await col().updateOne(
-        { _id, ...notDeletedFilter(req) },
-        {
-          $set: {
-            "patient.name": patient.name.trim(),
-            "patient.age": patient.age,
-            "patient.gender": patient.gender,
-            "patient.bloodGroup": patient.bloodGroup ?? null,
-            "patient.contactNumber": patient.contactNumber.trim(),
-            "patient.address": patient.address?.trim() ?? "",
-            "patient.guardian": {
-              name: patient.guardian?.name?.trim() ?? "",
-              relation: patient.guardian?.relation?.trim() ?? "",
-              contactNumber: patient.guardian?.contactNumber?.trim() ?? "",
-            },
-            "patient.updatedAt": updatedAt,
-            "patient.updatedBy": by(req),
-            updated: { at: updatedAt, by: by(req) },
-          },
-        },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
-      return reply.send({ success: true });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to update patient info" });
-    }
-  });
-
-  // ── PATCH /indoor-patient/:id/clinical-notes ─────────────────────────────────
-  fastify.patch("/indoor-patient/:id/clinical-notes", updateClinicalNotesSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { disease } = req.body;
-
-      const updatedAt = now();
-      const result = await col().updateOne(
-        { _id, ...notDeletedFilter(req) },
-        {
-          $set: {
-            "disease.description": disease.description?.trim() ?? "",
-            "disease.medicalHistory": disease.medicalHistory?.trim() ?? "",
-            "disease.updatedAt": updatedAt,
-            "disease.updatedBy": by(req),
-            updated: { at: updatedAt, by: by(req) },
-          },
-        },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
-      return reply.send({ success: true });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to update clinical notes" });
-    }
-  });
-
-  // ── PATCH /indoor-patient/:id/transfer-ward ──────────────────────────────────
-  fastify.patch("/indoor-patient/:id/transfer-ward", transferWardSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-
-      const admission = await col().findOne(
-        { _id, ...notDeletedFilter(req) },
-        { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
-      );
-      if (!admission) return reply.code(404).send({ error: "Patient not found" });
-      if (admission.status !== "admitted") return reply.code(400).send({ error: "Patient is not currently admitted" });
-
-      const { spaceId, bedNumber, note } = req.body;
-
-      if (admission.space?.spaceId?.toString() === toObjectId(spaceId)?.toString())
-        return reply.code(400).send({ error: "Patient is already admitted in this cabin" });
-
-      const newSpace = await spacesCol().findOne({ _id: toObjectId(spaceId), labId: labId(req) });
-      if (!newSpace) return reply.code(404).send({ error: "Target space not found" });
-
-      if (newSpace.multiBed) {
-        if (bedNumber == null) return reply.code(400).send({ error: "bedNumber required for multi-bed space" });
-        const { totalNumberOfBed, bedStartingNumber, booked = [] } = newSpace.multiBedConf;
-        if (bedNumber < bedStartingNumber || bedNumber >= bedStartingNumber + totalNumberOfBed)
-          return reply.code(400).send({ error: "Bed number out of range" });
-        if (booked.includes(bedNumber)) return reply.code(409).send({ error: "Bed is already occupied" });
-      } else {
-        if (newSpace.reserved) return reply.code(409).send({ error: "Target space is already occupied" });
-      }
-
-      const oldSpace = admission.space;
-      const transferTime = now();
-
-      if (oldSpace.bedNumber != null) {
-        await spacesCol().updateOne(
-          { _id: oldSpace.spaceId, labId: labId(req) },
-          {
-            $pull: { "multiBedConf.booked": oldSpace.bedNumber },
-            $set: { updated: { at: transferTime, by: by(req) } },
-          },
-        );
-      } else {
-        await spacesCol().updateOne(
-          { _id: oldSpace.spaceId, labId: labId(req) },
-          { $set: { reserved: false, reservedNote: "", updated: { at: transferTime, by: by(req) } } },
-        );
-      }
-
-      if (newSpace.multiBed) {
-        await spacesCol().updateOne(
-          { _id: toObjectId(spaceId), labId: labId(req) },
-          { $push: { "multiBedConf.booked": bedNumber }, $set: { updated: { at: transferTime, by: by(req) } } },
-        );
-      } else {
-        await spacesCol().updateOne(
-          { _id: toObjectId(spaceId), labId: labId(req) },
+        const updatedAt = now();
+        const result = await col().updateOne(
+          { _id, ...notDeletedFilter(req) },
           {
             $set: {
-              reserved: true,
-              reservedNote: `IPD: ${admission.admissionId}`,
-              updated: { at: transferTime, by: by(req) },
+              "patient.name": patient.name.trim(),
+              "patient.age": patient.age,
+              "patient.gender": patient.gender,
+              "patient.bloodGroup": patient.bloodGroup ?? null,
+              "patient.contactNumber": patient.contactNumber.trim(),
+              "patient.address": patient.address?.trim() ?? "",
+              "patient.guardian": {
+                name: patient.guardian?.name?.trim() ?? "",
+                relation: patient.guardian?.relation?.trim() ?? "",
+                contactNumber: patient.guardian?.contactNumber?.trim() ?? "",
+              },
+              "patient.updatedAt": updatedAt,
+              "patient.updatedBy": by(req),
+              updated: { at: updatedAt, by: by(req) },
             },
           },
         );
+        if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+        return reply.send({ success: true });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to update patient info" });
       }
+    },
+  );
 
-      await col().updateOne(
-        { _id, ...notDeletedFilter(req) },
-        {
-          $set: {
-            space: {
-              spaceId: toObjectId(spaceId),
-              spaceName: newSpace.name,
-              bedNumber: newSpace.multiBed ? bedNumber : null,
-              chargePerDay: newSpace.chargePerDay,
-              fromDate: transferTime,
-            },
-            updated: { at: transferTime, by: by(req) },
-          },
-          $push: {
-            wardHistory: {
-              fromSpaceId: oldSpace.spaceId,
-              fromSpaceName: oldSpace.spaceName,
-              fromBedNumber: oldSpace.bedNumber,
-              toSpaceId: toObjectId(spaceId),
-              toSpaceName: newSpace.name,
-              toBedNumber: newSpace.multiBed ? bedNumber : null,
-              chargePerDay: oldSpace.chargePerDay,
-              fromDate: oldSpace.fromDate ?? admission.admittedAt,
-              toDate: transferTime,
-              movedAt: transferTime,
-              movedBy: by(req),
-              note: note ?? "",
+  // ── PATCH /indoor-patient/:id/clinical-notes ─────────────────────────────────
+  fastify.patch(
+    "/indoor-patient/:id/clinical-notes",
+    { ...updateClinicalNotesSchema, ...requireEditInfo },
+    async (req, reply) => {
+      try {
+        const _id = toObjectId(req.params.id);
+        if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+        const { disease } = req.body;
+
+        const updatedAt = now();
+        const result = await col().updateOne(
+          { _id, ...notDeletedFilter(req) },
+          {
+            $set: {
+              "disease.description": disease.description?.trim() ?? "",
+              "disease.medicalHistory": disease.medicalHistory?.trim() ?? "",
+              "disease.updatedAt": updatedAt,
+              "disease.updatedBy": by(req),
+              updated: { at: updatedAt, by: by(req) },
             },
           },
-        },
-      );
+        );
+        if (result.matchedCount === 0) return reply.code(404).send({ error: "Patient not found" });
+        return reply.send({ success: true });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to update clinical notes" });
+      }
+    },
+  );
 
-      return reply.send({ success: true });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to transfer patient" });
-    }
-  });
+  // ── PATCH /indoor-patient/:id/transfer-ward ──────────────────────────────────
+  fastify.patch(
+    "/indoor-patient/:id/transfer-ward",
+    { ...transferWardSchema, ...requireTransferWard },
+    async (req, reply) => {
+      try {
+        const _id = toObjectId(req.params.id);
+        if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+
+        const admission = await col().findOne(
+          { _id, ...notDeletedFilter(req) },
+          { projection: { status: 1, admissionId: 1, space: 1, admittedAt: 1 } },
+        );
+        if (!admission) return reply.code(404).send({ error: "Patient not found" });
+        if (admission.status !== "admitted")
+          return reply.code(400).send({ error: "Patient is not currently admitted" });
+
+        const { spaceId, bedNumber, note } = req.body;
+
+        if (admission.space?.spaceId?.toString() === toObjectId(spaceId)?.toString())
+          return reply.code(400).send({ error: "Patient is already admitted in this cabin" });
+
+        const newSpace = await spacesCol().findOne({ _id: toObjectId(spaceId), labId: labId(req) });
+        if (!newSpace) return reply.code(404).send({ error: "Target space not found" });
+
+        if (newSpace.multiBed) {
+          if (bedNumber == null) return reply.code(400).send({ error: "bedNumber required for multi-bed space" });
+          const { totalNumberOfBed, bedStartingNumber, booked = [] } = newSpace.multiBedConf;
+          if (bedNumber < bedStartingNumber || bedNumber >= bedStartingNumber + totalNumberOfBed)
+            return reply.code(400).send({ error: "Bed number out of range" });
+          if (booked.includes(bedNumber)) return reply.code(409).send({ error: "Bed is already occupied" });
+        } else {
+          if (newSpace.reserved) return reply.code(409).send({ error: "Target space is already occupied" });
+        }
+
+        const oldSpace = admission.space;
+        const transferTime = now();
+
+        if (oldSpace.bedNumber != null) {
+          await spacesCol().updateOne(
+            { _id: oldSpace.spaceId, labId: labId(req) },
+            {
+              $pull: { "multiBedConf.booked": oldSpace.bedNumber },
+              $set: { updated: { at: transferTime, by: by(req) } },
+            },
+          );
+        } else {
+          await spacesCol().updateOne(
+            { _id: oldSpace.spaceId, labId: labId(req) },
+            { $set: { reserved: false, reservedNote: "", updated: { at: transferTime, by: by(req) } } },
+          );
+        }
+
+        if (newSpace.multiBed) {
+          await spacesCol().updateOne(
+            { _id: toObjectId(spaceId), labId: labId(req) },
+            { $push: { "multiBedConf.booked": bedNumber }, $set: { updated: { at: transferTime, by: by(req) } } },
+          );
+        } else {
+          await spacesCol().updateOne(
+            { _id: toObjectId(spaceId), labId: labId(req) },
+            {
+              $set: {
+                reserved: true,
+                reservedNote: `IPD: ${admission.admissionId}`,
+                updated: { at: transferTime, by: by(req) },
+              },
+            },
+          );
+        }
+
+        await col().updateOne(
+          { _id, ...notDeletedFilter(req) },
+          {
+            $set: {
+              space: {
+                spaceId: toObjectId(spaceId),
+                spaceName: newSpace.name,
+                bedNumber: newSpace.multiBed ? bedNumber : null,
+                chargePerDay: newSpace.chargePerDay,
+                fromDate: transferTime,
+              },
+              updated: { at: transferTime, by: by(req) },
+            },
+            $push: {
+              wardHistory: {
+                fromSpaceId: oldSpace.spaceId,
+                fromSpaceName: oldSpace.spaceName,
+                fromBedNumber: oldSpace.bedNumber,
+                toSpaceId: toObjectId(spaceId),
+                toSpaceName: newSpace.name,
+                toBedNumber: newSpace.multiBed ? bedNumber : null,
+                chargePerDay: oldSpace.chargePerDay,
+                fromDate: oldSpace.fromDate ?? admission.admittedAt,
+                toDate: transferTime,
+                movedAt: transferTime,
+                movedBy: by(req),
+                note: note ?? "",
+              },
+            },
+          },
+        );
+
+        return reply.send({ success: true });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to transfer patient" });
+      }
+    },
+  );
 
   // ── PATCH /indoor-patient/:id/change-doctor ──────────────────────────────────
-  fastify.patch("/indoor-patient/:id/change-doctor", changeDoctorSchema, async (req, reply) => {
-    try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { doctorId, note } = req.body;
+  fastify.patch(
+    "/indoor-patient/:id/change-doctor",
+    { ...changeDoctorSchema, ...requireChangeDoctor },
+    async (req, reply) => {
+      try {
+        const _id = toObjectId(req.params.id);
+        if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
+        const { doctorId, note } = req.body;
 
-      const admission = await col().findOne({ _id, ...notDeletedFilter(req) }, { projection: { supervisorDoctor: 1 } });
-      if (!admission) return reply.code(404).send({ error: "Patient not found" });
+        const admission = await col().findOne(
+          { _id, ...notDeletedFilter(req) },
+          { projection: { supervisorDoctor: 1 } },
+        );
+        if (!admission) return reply.code(404).send({ error: "Patient not found" });
 
-      if (admission.supervisorDoctor?.doctorId?.toString() === toObjectId(doctorId)?.toString())
-        return reply.code(400).send({ error: "Patient is already under this doctor" });
+        if (admission.supervisorDoctor?.doctorId?.toString() === toObjectId(doctorId)?.toString())
+          return reply.code(400).send({ error: "Patient is already under this doctor" });
 
-      const doctor = await doctorsCol().findOne({ _id: toObjectId(doctorId), labId: labId(req) });
-      if (!doctor) return reply.code(404).send({ error: "Doctor not found" });
+        const doctor = await doctorsCol().findOne({ _id: toObjectId(doctorId), labId: labId(req) });
+        if (!doctor) return reply.code(404).send({ error: "Doctor not found" });
 
-      const changedAt = now();
-      await col().updateOne(
-        { _id, ...notDeletedFilter(req) },
-        {
-          $set: {
-            supervisorDoctor: { doctorId: toObjectId(doctorId), name: doctor.name, degree: doctor.degree ?? "" },
-            updated: { at: changedAt, by: by(req) },
-          },
-          $push: {
-            doctorHistory: {
-              previousDoctorId: admission.supervisorDoctor.doctorId,
-              previousDoctorName: admission.supervisorDoctor.name,
-              newDoctorId: toObjectId(doctorId),
-              newDoctorName: doctor.name,
-              changedAt,
-              changedBy: by(req),
-              note: note ?? "",
+        const changedAt = now();
+        await col().updateOne(
+          { _id, ...notDeletedFilter(req) },
+          {
+            $set: {
+              supervisorDoctor: { doctorId: toObjectId(doctorId), name: doctor.name, degree: doctor.degree ?? "" },
+              updated: { at: changedAt, by: by(req) },
+            },
+            $push: {
+              doctorHistory: {
+                previousDoctorId: admission.supervisorDoctor.doctorId,
+                previousDoctorName: admission.supervisorDoctor.name,
+                newDoctorId: toObjectId(doctorId),
+                newDoctorName: doctor.name,
+                changedAt,
+                changedBy: by(req),
+                note: note ?? "",
+              },
             },
           },
-        },
-      );
+        );
 
-      return reply.send({ success: true });
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to change doctor" });
-    }
-  });
+        return reply.send({ success: true });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to change doctor" });
+      }
+    },
+  );
 
   // ── POST /indoor-patient/:id/expense ────────────────────────────────────────
   fastify.post("/indoor-patient/:id/expense", { ...addExpenseSchema, ...requireAddExpense }, async (req, reply) => {
@@ -904,36 +982,13 @@ async function indoorPatientRoutes(fastify) {
 
       if (category === "grand-total") {
         const expenseTotal = expenses.reduce((s, e) => s + (e.total ?? e.price * e.quantity), 0);
-
-        let bedTotal = 0;
-        if (admission.dealType === "regular") {
-          const tsBst = (ts) => new Date(ts + 6 * 3600 * 1000).toISOString().slice(0, 10);
-          const startStr = tsBst(admission.admittedAt);
-          const endStr = admission.releasedAt ? tsBst(admission.releasedAt) : tsBst(Date.now());
-          const startD = new Date(startStr + "T00:00:00Z");
-          const endD = new Date(endStr + "T00:00:00Z");
-          const cur = new Date(startD);
-          while (cur <= endD) {
-            const d = cur.toISOString().slice(0, 10);
-            let daily = admission.space.chargePerDay;
-            for (const h of admission.wardHistory ?? []) {
-              if (!h.fromDate || !h.toDate) continue;
-              const from = tsBst(h.fromDate);
-              const to = tsBst(h.toDate);
-              if (d >= from && d < to) {
-                daily = h.chargePerDay ?? admission.space.chargePerDay;
-                break;
-              }
-            }
-            bedTotal += daily;
-            cur.setUTCDate(cur.getUTCDate() + 1);
-          }
-        }
-
+        const bedTotal = computeBedTotal(admission);
         const packageTotal = admission.dealType === "package" ? (admission.packageDeal?.totalAmount ?? 0) : 0;
         categoryTotal = admission.dealType === "package" ? packageTotal : expenseTotal + bedTotal;
       } else if (category === "bed-charge") {
-        categoryTotal = Infinity;
+        // Was previously `Infinity` — meaning bed-charge discounts were unbounded.
+        // Now capped at the actual accrued bed total, same as every other category.
+        categoryTotal = computeBedTotal(admission);
       } else {
         const typeMap = {
           test: ["test"],
@@ -951,7 +1006,7 @@ async function indoorPatientRoutes(fastify) {
         .filter((d) => d.category === category)
         .reduce((s, d) => s + d.amount, 0);
 
-      if (categoryTotal !== Infinity && existingDiscount + amount > categoryTotal) {
+      if (existingDiscount + amount > categoryTotal) {
         return reply.code(400).send({
           error: `Total discount for "${category}" (${existingDiscount + amount}) exceeds category total (${categoryTotal})`,
         });
