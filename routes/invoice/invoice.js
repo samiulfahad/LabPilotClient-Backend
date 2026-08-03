@@ -29,7 +29,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *     testId: ObjectId,
  *     name: string,
  *     price: number,
- *     schemaId: ObjectId | null,
+ *     schemaId: ObjectId | null,          // presence marks this as an "online" test
  *     commission: number,                // per-test commission (e.g. to performing doctor/staff), snapshotted at invoice time
  *     // present only when schemaId is set:
  *     report?: object,
@@ -48,6 +48,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *     initial: number,                   // tests + products subtotal
  *     referrerDiscount: number,
  *     referrerCommission: number,
+ *     referrerCommissionTestWise: number, // sum of tests[].commission — distinct from referrerCommission
  *     labAdjustment: number,
  *     invoiceFee: number,                // lab.billing.feePerInvoice, if applied — added to the patient's total
  *     final: number,                     // initial - referrerDiscount - labAdjustment + invoiceFee
@@ -56,7 +57,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *   },
  *
  *   paymentMode: "cash" | "bkash" | "nagad" | "card" | "bank_transfer" | "others",
- *   isOnlineFeePaid: boolean,            // whether the lab's invoiceFee was applied to this invoice
+ *   isOnlineFeePaid: boolean,            // whether the lab's invoiceFee was applied to this invoice (only ever true if the invoice has an online test)
  *   onlineFeePaidBy: "lab" | "patient",  // which backend processed the fee — THIS route only accepts "lab"; "patient" is a separate backend
  *
  *   createdBy: { id: ObjectId, name: string },
@@ -164,13 +165,6 @@ const paginationQuerySchema = {
 };
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
-
-const invoiceIdSchema = {
-  schema: {
-    tags: ["Invoices"],
-    params: invoiceIdParamSchema,
-  },
-};
 
 const addInvoiceSchema = {
   schema: {
@@ -435,22 +429,19 @@ async function invoiceRoutes(fastify) {
       }
 
       // ── Validate the online invoice fee against the lab's own config ────
-      // Prevents a client from sending isOnlineFeePaid:false / invoiceFee:0
-      // on a lab where forceInvoiceFee is on, or an arbitrary invoiceFee
-      // value that doesn't match what the lab is actually configured for.
+      // Billing config comes from the JWT (embedded at /login, carried
+      // through /refresh) instead of a live DB lookup — see authRoutes.js.
+      // It only goes stale between a billing change and the staff's next
+      // /login or refresh cycle; the billing-update route clears sessions
+      // for the lab to force that re-sync promptly.
       //
       // The fee only ever applies when the invoice contains at least one
-      // "online" test (a test with schemaId set). This is checked directly
-      // against the tests array already sent in the request body — no extra
-      // DB lookup needed, since schemaId is provided by the client and was
-      // itself sourced from /invoice/required-data.
-      const lab = await fastify.mongo.db
-        .collection("labs")
-        .findOne({ _id: labId(req) }, { projection: { "billing.feePerInvoice": 1, "billing.forceInvoiceFee": 1 } });
-
+      // "online" test (schemaId set) — checked directly against the tests
+      // array already in the request body, no extra DB lookup needed there
+      // either.
       const hasOnlineTest = tests.some((t) => !!t.schemaId);
-      const configuredFee = lab?.billing?.feePerInvoice || 0;
-      const feeForced = !!lab?.billing?.forceInvoiceFee;
+      const configuredFee = req.user.billing?.feePerInvoice || 0;
+      const feeForced = !!req.user.billing?.forceInvoiceFee;
       const expectedFeeApplied = hasOnlineTest && (feeForced ? configuredFee > 0 : isOnlineFeePaid);
       const expectedFee = expectedFeeApplied ? configuredFee : 0;
 
@@ -508,6 +499,12 @@ async function invoiceRoutes(fastify) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
       }
 
+      // Sum of each test's own `commission` field — distinct from
+      // amount.referrerCommission (the referring doctor/agent's cut).
+      // Derived server-side from the validated tests array, never trusted
+      // from the client.
+      const referrerCommissionTestWise = round2(tests.reduce((sum, t) => sum + (t.commission || 0), 0));
+
       // ── Insert invoice ──────────────────────────────────────────────────
       await col().insertOne({
         labId: labId(req),
@@ -547,6 +544,7 @@ async function invoiceRoutes(fastify) {
           initial: amount.initial,
           referrerDiscount: amount.referrerDiscount,
           referrerCommission: amount.referrerCommission,
+          referrerCommissionTestWise,
           labAdjustment: amount.labAdjustment,
           final: amount.final,
           net: amount.net,
@@ -831,23 +829,57 @@ async function invoiceRoutes(fastify) {
   );
 
   // ── GET /invoice/:invoiceId ───────────────────────────────────────────────
+  // FIX: previously returned the full raw document (no projection) — leaked
+  // internal fields (labId, labKey, createdBy, deletion, collections history,
+  // test commissions, referrer id, etc.) to whatever consumes this route
+  // (PrintInvoice.jsx's print/share view). Project down to exactly what
+  // normaliseInvoice() in that component reads.
   fastify.get(
     "/invoice/:invoiceId",
     {
       schema: {
         tags: ["Invoices"],
-        summary: "Get full invoice by ID",
+        summary: "Get invoice by ID for the print/share view",
         params: invoiceIdParamSchema,
       },
     },
     async (req, reply) => {
       try {
-        const invoice = await col().findOne({
-          invoiceId: req.params.invoiceId,
-          labId: labId(req),
-        });
+        const invoice = await col().findOne(
+          { invoiceId: req.params.invoiceId, labId: labId(req) },
+          {
+            projection: {
+              _id: 0,
+              invoiceId: 1,
+              createdAt: 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "referrer.name": 1,
+              "referrer.type": 1,
+              "tests.name": 1,
+              "tests.price": 1,
+              "products.name": 1,
+              "products.price": 1,
+              "products.quantity": 1,
+              "amount.initial": 1,
+              "amount.referrerDiscount": 1,
+              "amount.labAdjustment": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "amount.invoiceFee": 1,
+              paymentMode: 1,
+            },
+          },
+        );
         if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-        return reply.send(invoice);
+
+        // `link` isn't a stored field — it's derived from invoiceId the same
+        // way POST /invoice/add returns it at creation time. Reconstruct it
+        // here so PrintInvoice.jsx's normaliseInvoice() has reportLink/link
+        // to fall back on when it fetches by ID directly (not via router state).
+        return reply.send({ ...invoice, link: `https://labpilotpro.com/${invoice.invoiceId}` });
       } catch (err) {
         req.log.error(err);
         return reply.code(500).send({ error: "Failed to fetch invoice" });

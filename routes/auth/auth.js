@@ -12,6 +12,13 @@ const isValidLabKey = (labKey) => typeof labKey === "string" && LAB_KEY_PATTERN.
 // is invalidated and the person has to request a new one via /forgot-password.
 const MAX_OTP_ATTEMPTS = 5;
 
+// Shape used for the `billing` claim embedded in the JWT — kept in one place
+// so /login and /refresh can never drift out of sync with each other.
+const toBillingClaim = (lab) => ({
+  feePerInvoice: lab?.billing?.feePerInvoice ?? 0,
+  forceInvoiceFee: !!lab?.billing?.forceInvoiceFee,
+});
+
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
@@ -67,6 +74,9 @@ async function authRoutes(fastify) {
       labId: staff.labId.toString(),
       type: lab?.type,
       maxLabAdjustment: staff.maxLabAdjustment ?? 0,
+      // Snapshotted at login/refresh time — see /refresh for the staleness
+      // tradeoff, and the billing-update route for how this gets invalidated.
+      billing: toBillingClaim(lab),
     };
 
     const deviceId = randomUUID();
@@ -247,6 +257,12 @@ async function authRoutes(fastify) {
       labId: decoded.labId,
       type: decoded.type,
       maxLabAdjustment: decoded.maxLabAdjustment ?? 0,
+      // Carried forward from the refresh token as-is — this is the
+      // intentional staleness window: billing only refreshes on the next
+      // /login, or immediately if the billing-update route clears sessions
+      // for this labId (see billingRoutes.js), which makes refresh fail
+      // below and forces a fresh /login.
+      billing: decoded.billing ?? { feePerInvoice: 0, forceInvoiceFee: false },
     };
 
     const existingSession = await tokensCollection().findOne({
