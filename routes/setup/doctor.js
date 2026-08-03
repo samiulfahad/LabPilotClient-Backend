@@ -1,5 +1,16 @@
 /**
  * doctorRoutes.js
+ *
+ * Audited — no functional bugs found. All routes correctly scope by labId,
+ * validate departments/designation against the allowed static-data sets, and
+ * cap percentage commission at 100. One design note (not a bug, not changed):
+ * DELETE /doctor/:id is a hard delete with no check for doctors currently
+ * supervising admitted patients. This is safe because indoorPatients stores a
+ * denormalized snapshot ({doctorId, name, degree}) at admit/change-doctor
+ * time rather than a live join, so deleting a doctor won't corrupt existing
+ * patient records — but it will leave a dangling doctorId that can no longer
+ * be resolved if you ever try to look the doctor up again. Confirm this
+ * matches intended behavior.
  */
 
 import toObjectId from "../../utils/db.js";

@@ -6,6 +6,12 @@ import toObjectId from "../../utils/db.js";
 const LAB_KEY_PATTERN = /^\d{4}$/;
 const isValidLabKey = (labKey) => typeof labKey === "string" && LAB_KEY_PATTERN.test(labKey.trim());
 
+// OTP guess-limiting for /reset-password — a 6-digit OTP is only 1,000,000
+// combinations; without a cap, an attacker could brute-force it within its
+// 10-minute validity window. After MAX_OTP_ATTEMPTS wrong guesses, the OTP
+// is invalidated and the person has to request a new one via /forgot-password.
+const MAX_OTP_ATTEMPTS = 5;
+
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
@@ -22,7 +28,11 @@ async function authRoutes(fastify) {
     }
 
     const staff = await staffsCollection().findOne({ labKey: String(labKey).trim(), phone });
-    if (!staff || !(await bcrypt.compare(password, staff.password)) || staff.deletion?.status || !staff.isActive) {
+    // NOTE: staffRoutes.js now hard-deletes staff (previously soft-deleted via
+    // a `deletion.status` flag). A deleted staff member simply won't be found
+    // by this findOne anymore, so `!staff` already covers that case — the old
+    // `staff.deletion?.status` check is removed as dead code.
+    if (!staff || !(await bcrypt.compare(password, staff.password)) || !staff.isActive) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
@@ -123,7 +133,9 @@ async function authRoutes(fastify) {
 
     const staff = await staffsCollection().findOne({ phone, labKey: normalizedLabKey });
 
-    if (!staff || staff.deletion?.status || !staff.isActive) {
+    // NOTE: same dead-code removal as /login above — staff.deletion?.status
+    // can no longer exist now that staffRoutes.js hard-deletes.
+    if (!staff || !staff.isActive) {
       return reply.send({ message: "If this number is registered, an OTP has been sent." });
     }
 
@@ -143,6 +155,7 @@ async function authRoutes(fastify) {
       labKey: normalizedLabKey,
       staffId: toObjectId(staff._id),
       otp: fastify.hashToken(otp),
+      attempts: 0,
       createdAt: Date.now(),
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     });
@@ -173,15 +186,29 @@ async function authRoutes(fastify) {
     if (newPassword.length < 6) {
       return reply.code(400).send({ error: "Password must be at least 6 characters" });
     }
+    const normalizedLabKey = String(labKey).trim();
 
+    // Look up by phone+labKey first (not by matching the OTP hash directly)
+    // so we can track and cap wrong guesses against this specific record —
+    // matching by hash up front would mean a wrong guess finds no document
+    // at all and there'd be nothing to attach an attempt counter to.
     const record = await otpCollection().findOne({
       phone,
-      labKey: String(labKey).trim(),
-      otp: fastify.hashToken(otp),
+      labKey: normalizedLabKey,
       expiresAt: { $gt: new Date() },
     });
 
     if (!record) {
+      return reply.code(400).send({ error: "Invalid or expired OTP" });
+    }
+
+    if (record.attempts >= MAX_OTP_ATTEMPTS) {
+      await otpCollection().deleteOne({ _id: record._id });
+      return reply.code(429).send({ error: "Too many incorrect attempts. Please request a new OTP." });
+    }
+
+    if (record.otp !== fastify.hashToken(otp)) {
+      await otpCollection().updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
       return reply.code(400).send({ error: "Invalid or expired OTP" });
     }
 

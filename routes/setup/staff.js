@@ -1,10 +1,26 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import toObjectId from "../../utils/db.js";
-import generateInvoiceId from "../../utils/generateInvoiceId.js";
 import { ALLOWED_PERMISSIONS } from "../staticData/staticData.js";
 
 const collectionName = "staffs";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * MIGRATION NOTE — soft delete → hard delete (see audit):
+ * DELETE /staff/:id previously flipped a `deletion.status` flag instead of
+ * removing the document. It now does a real deleteOne, matching the hard-delete
+ * pattern already used by doctorRoutes.js and referrerRoutes.js. All filtering
+ * on `deletion.status` has been removed from every query in this file as a
+ * result — it's dead weight once nothing sets that field anymore.
+ *
+ * IMPORTANT: if your `staffs` collection already has documents with
+ * `deletion.status: true` from the old soft-delete system, those rows will
+ * REAPPEAR in listings once this filter is gone, because they were never
+ * actually removed from the collection. Run a one-time cleanup before
+ * deploying this change:
+ *   db.staffs.deleteMany({ "deletion.status": true })
+ */
 
 // ─── Reusable Schema Fragments ────────────────────────────────────────────────
 
@@ -132,7 +148,7 @@ const activateStaffSchema = {
 const deleteStaffSchema = {
   schema: {
     tags: ["Staff"],
-    summary: "Soft delete a staff member",
+    summary: "Permanently delete a staff member",
     params: staffIdParamSchema,
   },
 };
@@ -142,6 +158,14 @@ const deleteStaffSchema = {
 // Derived from ALLOWED_PERMISSIONS so it never drifts out of sync
 const normalizePermissions = (perms = {}) =>
   Object.fromEntries(ALLOWED_PERMISSIONS.map((p) => [p.key, perms[p.key] ?? false]));
+
+// Cryptographically-random one-time password for new staff, sent via SMS and
+// meant to be changed on first login. Previously this reused
+// generateInvoiceId() — a business-ID generator, not a credential generator —
+// which is very likely lower-entropy and more predictable than a password
+// needs to be. base64url gives 64 symbols/char (~6 bits/char); 12 chars is
+// ~72 bits of entropy, comfortably strong for a short-lived temp credential.
+const generateTempPassword = (length = 12) => crypto.randomBytes(length).toString("base64url").slice(0, length);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -153,28 +177,25 @@ async function staffRoutes(fastify) {
   fastify.addHook("onRequest", fastify.requireAdmin);
 
   // ── Scoped duplicate checker ──────────────────────────────────────────────
-  const checkDuplicate = async (req, field, value, excludeId = null) => {
-    const query = {
-      [field]: value,
-      labId: labId(req),
-      "deletion.status": { $ne: true },
-    };
-    if (excludeId) query._id = { $ne: toObjectId(excludeId) };
-    return collection.findOne(query, { projection: { _id: 1 } });
+  // Only ever called from POST /staff/add (never with an excludeId — email/
+  // phone can't be edited post-registration, so there's no "check duplicate
+  // excluding myself" case). Kept simple accordingly.
+  const checkDuplicate = async (req, field, value) => {
+    return collection.findOne({ [field]: value, labId: labId(req) }, { projection: { _id: 1 } });
   };
 
-  // Shared guard used by both edit routes: staff must exist in this lab and
-  // must not be an admin account (admins always have fixed, full access).
+  // Shared guard used by every route that edits or changes the lifecycle state
+  // of an existing staff record: staff must exist in this lab and must not be
+  // an admin account (admins always have fixed, full access, and must never
+  // be deactivated/deleted/reassigned via these routes — including by another
+  // admin, and including targeting themselves).
   const findEditableStaff = async (req, reply) => {
     const _id = toObjectId(req.params.id);
     if (!_id) {
       reply.code(400).send({ error: "Invalid staff ID" });
       return null;
     }
-    const existing = await collection.findOne(
-      { _id, labId: labId(req), "deletion.status": { $ne: true } },
-      { projection: { role: 1 } },
-    );
+    const existing = await collection.findOne({ _id, labId: labId(req) }, { projection: { role: 1 } });
     if (!existing) {
       reply.code(404).send({ error: "Staff not found" });
       return null;
@@ -191,7 +212,7 @@ async function staffRoutes(fastify) {
     try {
       return collection
         .find(
-          { labId: labId(req), "deletion.status": { $ne: true } },
+          { labId: labId(req) },
           {
             projection: {
               name: 1,
@@ -200,7 +221,6 @@ async function staffRoutes(fastify) {
               permissions: 1,
               isActive: 1,
               role: 1,
-              deletion: 1,
               maxLabAdjustment: 1,
             },
           },
@@ -234,7 +254,7 @@ async function staffRoutes(fastify) {
         return reply.code(409).send({ error: "Phone number already exists in this lab" });
       }
 
-      const password = generateInvoiceId();
+      const password = generateTempPassword();
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const result = await collection.insertOne({
@@ -248,7 +268,6 @@ async function staffRoutes(fastify) {
         permissions: normalizePermissions(permissions),
         isActive: true,
         maxLabAdjustment: maxLabAdjustment ?? 0,
-        deletion: { status: false, at: null, by: null },
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
 
@@ -270,7 +289,7 @@ async function staffRoutes(fastify) {
       if (!_id) return;
 
       await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        { _id, labId: labId(req) },
         {
           $set: {
             permissions: normalizePermissions(req.body.permissions),
@@ -289,13 +308,20 @@ async function staffRoutes(fastify) {
   });
 
   // ── PUT /staff/:id/adjustment ──────────────────────────────────────────────
+  // FIXED: previously didn't invalidate tokens, unlike permissions/deactivate/
+  // delete above and below. /refresh rebuilds the access token from the OLD
+  // refresh token's own embedded claims rather than re-querying this
+  // collection, so a staff member's live session kept using their stale
+  // maxLabAdjustment indefinitely via silent refresh — an admin lowering the
+  // limit had no real effect until the staff member's refresh token expired
+  // naturally. Now forces re-login, matching every other sensitive change here.
   fastify.put("/staff/:id/adjustment", updateAdjustmentSchema, async (req, reply) => {
     try {
       const _id = await findEditableStaff(req, reply);
       if (!_id) return;
 
       await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+        { _id, labId: labId(req) },
         {
           $set: {
             maxLabAdjustment: req.body.maxLabAdjustment,
@@ -303,6 +329,8 @@ async function staffRoutes(fastify) {
           },
         },
       );
+
+      await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
 
       return { message: "Adjustment limit updated successfully" };
     } catch (err) {
@@ -314,11 +342,11 @@ async function staffRoutes(fastify) {
   // ── PATCH /staff/:id/deactivate ───────────────────────────────────────────
   fastify.patch("/staff/:id/deactivate", deactivateStaffSchema, async (req, reply) => {
     try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+      const _id = await findEditableStaff(req, reply);
+      if (!_id) return;
 
-      const result = await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+      await collection.updateOne(
+        { _id, labId: labId(req) },
         {
           $set: {
             isActive: false,
@@ -326,7 +354,6 @@ async function staffRoutes(fastify) {
           },
         },
       );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
 
       // Kill all active sessions for this staff member — a deactivated
       // account shouldn't be able to keep using an already-issued refresh
@@ -343,11 +370,11 @@ async function staffRoutes(fastify) {
   // ── PATCH /staff/:id/activate ─────────────────────────────────────────────
   fastify.patch("/staff/:id/activate", activateStaffSchema, async (req, reply) => {
     try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+      const _id = await findEditableStaff(req, reply);
+      if (!_id) return;
 
-      const result = await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
+      await collection.updateOne(
+        { _id, labId: labId(req) },
         {
           $set: {
             isActive: true,
@@ -355,7 +382,6 @@ async function staffRoutes(fastify) {
           },
         },
       );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
       return { message: "Staff activated successfully", _id: req.params.id };
     } catch (err) {
       req.log.error(err);
@@ -364,24 +390,22 @@ async function staffRoutes(fastify) {
   });
 
   // ── DELETE /staff/:id ─────────────────────────────────────────────────────
+  // Hard delete — was previously a soft delete (deletion.status flag). Now
+  // matches the hard-delete pattern already used by doctorRoutes.js and
+  // referrerRoutes.js. Still guarded by findEditableStaff (admin accounts
+  // can never be targeted) and still invalidates any active sessions, same
+  // as deactivate — a deleted staff member's existing refresh token must not
+  // keep working.
   fastify.delete("/staff/:id", deleteStaffSchema, async (req, reply) => {
     try {
-      const _id = toObjectId(req.params.id);
-      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+      const _id = await findEditableStaff(req, reply);
+      if (!_id) return;
 
-      const result = await collection.updateOne(
-        { _id, labId: labId(req), "deletion.status": { $ne: true } },
-        {
-          $set: {
-            deletion: {
-              status: true,
-              at: Date.now(),
-              by: { id: toObjectId(req.user.id), name: req.user.name },
-            },
-          },
-        },
-      );
-      if (result.matchedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+      const result = await collection.deleteOne({ _id, labId: labId(req) });
+      if (result.deletedCount === 0) return reply.code(404).send({ error: "Staff not found" });
+
+      await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
+
       return { message: "Staff deleted successfully" };
     } catch (err) {
       req.log.error(err);

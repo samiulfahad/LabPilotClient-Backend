@@ -30,6 +30,7 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *     name: string,
  *     price: number,
  *     schemaId: ObjectId | null,
+ *     commission: number,                // per-test commission (e.g. to performing doctor/staff), snapshotted at invoice time
  *     // present only when schemaId is set:
  *     report?: object,
  *     isCompleted?: boolean,
@@ -209,7 +210,15 @@ const addInvoiceSchema = {
                 type: ["string", "null"],
                 minLength: 24,
                 maxLength: 24,
-                description: "ObjectId of the report schema (if any)",
+                description: "ObjectId of the report schema (if any) — presence marks this as an 'online' test",
+              },
+              commission: {
+                type: "number",
+                minimum: 0,
+                maximum: 10000000,
+                default: 0,
+                description:
+                  "Per-test commission (e.g. paid to the performing doctor/staff), snapshotted at invoice creation time",
               },
             },
           },
@@ -364,7 +373,10 @@ async function invoiceRoutes(fastify) {
             .toArray(),
           fastify.mongo.db
             .collection("tests")
-            .find({ labId: labId(req) }, { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1 } })
+            .find(
+              { labId: labId(req) },
+              { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1, commission: 1 } },
+            )
             .sort({ createdAt: -1 })
             .toArray(),
           fastify.mongo.db
@@ -426,13 +438,20 @@ async function invoiceRoutes(fastify) {
       // Prevents a client from sending isOnlineFeePaid:false / invoiceFee:0
       // on a lab where forceInvoiceFee is on, or an arbitrary invoiceFee
       // value that doesn't match what the lab is actually configured for.
+      //
+      // The fee only ever applies when the invoice contains at least one
+      // "online" test (a test with schemaId set). This is checked directly
+      // against the tests array already sent in the request body — no extra
+      // DB lookup needed, since schemaId is provided by the client and was
+      // itself sourced from /invoice/required-data.
       const lab = await fastify.mongo.db
         .collection("labs")
         .findOne({ _id: labId(req) }, { projection: { "billing.feePerInvoice": 1, "billing.forceInvoiceFee": 1 } });
 
+      const hasOnlineTest = tests.some((t) => !!t.schemaId);
       const configuredFee = lab?.billing?.feePerInvoice || 0;
       const feeForced = !!lab?.billing?.forceInvoiceFee;
-      const expectedFeeApplied = feeForced ? configuredFee > 0 : isOnlineFeePaid;
+      const expectedFeeApplied = hasOnlineTest && (feeForced ? configuredFee > 0 : isOnlineFeePaid);
       const expectedFee = expectedFeeApplied ? configuredFee : 0;
 
       if (Math.round((amount.invoiceFee || 0) * 100) !== Math.round(expectedFee * 100)) {
@@ -514,6 +533,7 @@ async function invoiceRoutes(fastify) {
           name: t.name,
           price: t.price,
           schemaId: t.schemaId ? toObjectId(t.schemaId) : null,
+          commission: t.commission || 0,
           ...(t.schemaId && { report: {}, isCompleted: false }),
         })),
         products: products.map((p) => ({

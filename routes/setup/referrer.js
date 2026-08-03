@@ -1,3 +1,20 @@
+/**
+ * referrerRoutes.js
+ *
+ * Audited — no functional bugs found. Same labId scoping and percentage-cap
+ * validation pattern as doctorRoutes.js. Two non-bug observations, left
+ * unchanged since fixing either would change the API contract the frontend
+ * already depends on:
+ *  - GET /referrers has no pagination (returns the full list). Fine at
+ *    current scale; revisit if referrer lists grow large. Frontend
+ *    (ManageReferrer) expects a plain array in the response, so switching to
+ *    a paginated {referrers,total,...} shape would require a matching
+ *    frontend change.
+ *  - DELETE /referrer/:id is a hard delete with no reference check — same
+ *    reasoning as doctorRoutes.js applies (indoorPatients denormalizes
+ *    referrer name/type at admission time, so this is safe, just leaves a
+ *    dangling referrerId).
+ */
 import toObjectId from "../../utils/db.js";
 
 const collectionName = "referrers";
