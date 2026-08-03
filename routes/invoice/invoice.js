@@ -339,6 +339,7 @@ async function invoiceRoutes(fastify) {
   const userId = (req) => toObjectId(req.user.id);
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.requireModule("invoice"));
 
   const requireCreate = { onRequest: [fastify.authorize("createInvoice")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteInvoice")] };

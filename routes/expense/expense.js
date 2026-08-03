@@ -110,6 +110,7 @@ async function expenseRoutes(fastify) {
   const userId = (req) => toObjectId(req.user.id);
 
   fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("onRequest", fastify.requireModule("expense"));
 
   const requireCreate = { onRequest: [fastify.authorize("addExpense")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteExpense")] };

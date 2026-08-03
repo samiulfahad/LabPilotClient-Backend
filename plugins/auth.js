@@ -45,6 +45,13 @@ async function authPlugin(fastify) {
     }
   });
 
+  fastify.decorate("requireModule", (moduleName) => async (req, reply) => {
+    if (req.user.role === "admin") return;
+    if (!req.user.modules?.includes(moduleName)) {
+      return reply.code(403).send({ error: "Forbidden: Missing required module access" });
+    }
+  });
+
   fastify.decorate("requireAdmin", async (req, reply) => {
     if (req.user.role !== "admin") {
       return reply.code(403).send({ error: "Forbidden: Admins only" });

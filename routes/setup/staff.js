@@ -159,6 +159,23 @@ const deleteStaffSchema = {
 const normalizePermissions = (perms = {}) =>
   Object.fromEntries(ALLOWED_PERMISSIONS.map((p) => [p.key, perms[p.key] ?? false]));
 
+// Derives the set of module names a staff member has ANY access to, from
+// their normalized permissions map. A module stays out of the array unless
+// at least one of its permission keys is true; as soon as the last enabled
+// permission in a module is turned off, the module drops out on the next
+// recompute. Always call this AFTER normalizePermissions so every key is
+// present. Order follows ALLOWED_PERMISSIONS' first occurrence of each
+// module, not insertion order of the permissions object.
+const computeModules = (normalizedPerms) => {
+  const modules = [];
+  for (const p of ALLOWED_PERMISSIONS) {
+    if (normalizedPerms[p.key] && !modules.includes(p.module)) {
+      modules.push(p.module);
+    }
+  }
+  return modules;
+};
+
 // Cryptographically-random one-time password for new staff, sent via SMS and
 // meant to be changed on first login. Previously this reused
 // generateInvoiceId() — a business-ID generator, not a credential generator —
@@ -219,6 +236,7 @@ async function staffRoutes(fastify) {
               email: 1,
               phone: 1,
               permissions: 1,
+              modules: 1,
               isActive: 1,
               role: 1,
               maxLabAdjustment: 1,
@@ -256,6 +274,7 @@ async function staffRoutes(fastify) {
 
       const password = generateTempPassword();
       const hashedPassword = await bcrypt.hash(password, 10);
+      const normalizedPermissions = normalizePermissions(permissions);
 
       const result = await collection.insertOne({
         labId: labId(req),
@@ -265,7 +284,8 @@ async function staffRoutes(fastify) {
         phone,
         password: hashedPassword,
         role: "staff",
-        permissions: normalizePermissions(permissions),
+        permissions: normalizedPermissions,
+        modules: computeModules(normalizedPermissions),
         isActive: true,
         maxLabAdjustment: maxLabAdjustment ?? 0,
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
@@ -288,11 +308,14 @@ async function staffRoutes(fastify) {
       const _id = await findEditableStaff(req, reply);
       if (!_id) return;
 
+      const normalizedPermissions = normalizePermissions(req.body.permissions);
+
       await collection.updateOne(
         { _id, labId: labId(req) },
         {
           $set: {
-            permissions: normalizePermissions(req.body.permissions),
+            permissions: normalizedPermissions,
+            modules: computeModules(normalizedPermissions),
             updated: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
           },
         },

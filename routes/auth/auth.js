@@ -70,6 +70,11 @@ async function authRoutes(fastify) {
       name: staff.name,
       role: staff.role,
       permissions: grantedPermissions,
+      // Module-level access list, derived server-side from `permissions` by
+      // staffRoutes.js (staff.modules) whenever permissions are set/edited.
+      // Falls back to [] for any staff doc from before that field existed
+      // (i.e. hasn't had its permissions touched since) rather than throwing.
+      modules: staff.modules ?? [],
       labKey: String(staff.labKey),
       labId: staff.labId.toString(),
       type: lab?.type,
@@ -253,15 +258,19 @@ async function authRoutes(fastify) {
       name: decoded.name,
       role: decoded.role,
       permissions: decoded.permissions,
+      // Carried forward from the refresh token as-is, same staleness
+      // tradeoff as `permissions`/`billing` below — modules only refresh on
+      // the next /login, or immediately if the permissions-update route
+      // clears this staff member's sessions (see staffRoutes.js
+      // PUT /staff/:id/permissions), which makes refresh fail below and
+      // forces a fresh /login with the new modules list.
+      modules: decoded.modules ?? [],
       labKey: String(decoded.labKey),
       labId: decoded.labId,
       type: decoded.type,
       maxLabAdjustment: decoded.maxLabAdjustment ?? 0,
-      // Carried forward from the refresh token as-is — this is the
-      // intentional staleness window: billing only refreshes on the next
-      // /login, or immediately if the billing-update route clears sessions
-      // for this labId (see billingRoutes.js), which makes refresh fail
-      // below and forces a fresh /login.
+      // Snapshotted at login/refresh time — see /refresh for the staleness
+      // tradeoff, and the billing-update route for how this gets invalidated.
       billing: decoded.billing ?? { feePerInvoice: 0, forceInvoiceFee: false },
     };
 
