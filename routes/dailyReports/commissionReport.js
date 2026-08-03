@@ -18,13 +18,9 @@ const summaryQuerySchema = {
 async function commissionReportRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
-  const testsCol = () => fastify.mongo.db.collection("tests");
   const labId = (req) => toObjectId(req.user.labId);
   const isHospital = (req) => req.user.type === "hospital"; // diagnosticCenter labs have no IPD module
 
-  // Excludes soft-deleted indoor patients from every indoor commission/test
-  // figure. Missing `deletion` field (pre-soft-delete legacy docs) still
-  // matches null.
   const notDeletedFilter = (req) => ({ labId: labId(req), "deletion.at": null });
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -38,14 +34,7 @@ async function commissionReportRoutes(fastify) {
     if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
     try {
-      // ── Per-test commission rates for this lab: name → commission ────────────
-      // Keyed by trimmed test name since invoice/expense line items store the
-      // test name as free text, not a testId reference back to this collection.
-      const testRatesPromise = testsCol()
-        .find({ labId: labId(req) }, { projection: { name: 1, commission: 1 } })
-        .toArray();
-
-      // ── Outdoor: commission + test data per referrer (Referrer Based + Outdoor half of Test Based) ──
+      // ── Outdoor: commission + per-test commission (embedded on each invoice's test line — no external rate lookup needed) ──
       const outdoorRowsPromise = col()
         .aggregate(
           [
@@ -77,7 +66,15 @@ async function commissionReportRoutes(fastify) {
                     net: { $ifNull: ["$amount.net", 0] },
                     commission: { $ifNull: ["$amount.referrerCommission", 0] },
                     discount: { $ifNull: ["$amount.referrerDiscount", 0] },
-                    tests: "$tests.name",
+                    // Each test line already carries the commission rate that
+                    // applied at the time of this invoice.
+                    tests: {
+                      $map: {
+                        input: { $ifNull: ["$tests", []] },
+                        as: "t",
+                        in: { name: "$$t.name", commission: { $ifNull: ["$$t.commission", 0] } },
+                      },
+                    },
                   },
                 },
               },
@@ -94,13 +91,10 @@ async function commissionReportRoutes(fastify) {
         )
         .toArray();
 
-      // ── Indoor: test occurrences per supervising/referring doctor — Test Based only ──
-      // No commission/discount concept for indoor here; we only need doctor → test → count.
-      // $filter on expenses BEFORE $unwind keeps the unwind cheap on long admissions.
-      // diagnosticCenter labs have no IPD module — skip this aggregation entirely
-      // rather than querying indoorPatients for a collection that's always empty.
-      // Soft-deleted admissions are excluded via notDeletedFilter so their test
-      // expenses never contribute to a referrer/doctor's counts.
+      // ── Indoor: test occurrences per doctor, grouped by (test, commission rate) ──
+      // Grouping on rate — not just test — is what lets the frontend detect
+      // and surface a mid-window commission change (e.g. CBC ৳200 → ৳150).
+      // diagnosticCenter labs have no IPD module — skip entirely.
       const indoorRowsPromise = isHospital(req)
         ? indoorCol()
             .aggregate(
@@ -132,12 +126,20 @@ async function commissionReportRoutes(fastify) {
                     _id: {
                       refKey: { $ifNull: ["$referrer.referrerId", "$referrer.name"] },
                       testKey: { $ifNull: ["$expenses.itemId", "$expenses.name"] },
+                      rate: { $ifNull: ["$expenses.commission", 0] },
                     },
                     refName: { $first: "$referrer.name" },
                     refType: { $first: "$referrer.type" },
                     refId: { $first: "$referrer.referrerId" },
                     testName: { $first: "$expenses.name" },
                     count: { $sum: { $ifNull: ["$expenses.quantity", 1] } },
+                    commissionTotal: {
+                      $sum: {
+                        $multiply: [{ $ifNull: ["$expenses.quantity", 1] }, { $ifNull: ["$expenses.commission", 0] }],
+                      },
+                    },
+                    firstSeenAt: { $min: "$expenses.addedAt" },
+                    lastSeenAt: { $max: "$expenses.addedAt" },
                   },
                 },
               ],
@@ -146,21 +148,14 @@ async function commissionReportRoutes(fastify) {
             .toArray()
         : Promise.resolve([]);
 
-      const [testDocs, outdoorRows, indoorRows] = await Promise.all([
-        testRatesPromise,
-        outdoorRowsPromise,
-        indoorRowsPromise,
-      ]);
+      const [outdoorRows, indoorRows] = await Promise.all([outdoorRowsPromise, indoorRowsPromise]);
 
-      const testRates = {};
-      for (const t of testDocs) {
-        if (t.name) testRates[t.name.trim()] = t.commission ?? 0;
-      }
-
-      // ── Fold indoor rows into a per-referrer map: key -> { name, type, isRegistered, tests, totalTests } ──
+      // ── Fold indoor rows into a per-referrer map ──
+      // tests: flat list of { name, rate, count, commissionTotal, firstSeenAt, lastSeenAt }
+      // — one entry per (test, rate) combo — frontend merges same-name entries.
       const indoorByReferrer = new Map();
       for (const r of indoorRows) {
-        if (!r.refName) continue; // no referrer/doctor attached to this admission — skip
+        if (!r.refName) continue;
         const key = String(r._id.refKey);
         if (!indoorByReferrer.has(key)) {
           indoorByReferrer.set(key, {
@@ -172,19 +167,23 @@ async function commissionReportRoutes(fastify) {
           });
         }
         const entry = indoorByReferrer.get(key);
-        entry.tests.push([r.testName, r.count]);
+        entry.tests.push({
+          name: r.testName,
+          rate: r._id.rate,
+          count: r.count,
+          commissionTotal: r.commissionTotal,
+          firstSeenAt: r.firstSeenAt,
+          lastSeenAt: r.lastSeenAt,
+        });
         entry.totalTests += r.count;
-      }
-      for (const entry of indoorByReferrer.values()) {
-        entry.tests.sort((a, b) => b[1] - a[1]);
       }
 
       // ── Build registered / unregistered lists from outdoor rows, attach indoor tests ──
       const registered = [];
       const unregistered = [];
       let totalCommission = 0,
-        totalDiscount = 0;
-      let totalFinal = 0,
+        totalDiscount = 0,
+        totalFinal = 0,
         totalNet = 0,
         totalInvoices = 0;
 
@@ -223,8 +222,6 @@ async function commissionReportRoutes(fastify) {
       }
 
       // ── Doctors who only have indoor test activity (no outdoor invoices this window) ──
-      // Only ever populated for hospital-type labs, since indoorByReferrer stays
-      // empty for diagnosticCenter labs (indoorRows was skipped above).
       for (const [key, entry] of indoorByReferrer) {
         const base = {
           totalCommission: 0,
@@ -246,7 +243,6 @@ async function commissionReportRoutes(fastify) {
       return reply.send({
         registered,
         unregistered,
-        testRates,
         totals: { totalCommission, totalDiscount, totalFinal, totalNet, totalInvoices },
       });
     } catch (err) {

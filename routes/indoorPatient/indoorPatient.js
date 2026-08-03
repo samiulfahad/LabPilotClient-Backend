@@ -202,6 +202,9 @@ const addExpenseSchema = {
         quantity: { type: "integer", minimum: 1, default: 1 },
         note: { type: "string", maxLength: 300 },
         schemaId: nullableObjectIdSchema,
+        // Mirrors tests[].commission in invoiceRoutes.js — snapshotted at add-time,
+        // only meaningful when type === "test".
+        commission: { type: "number", minimum: 0, maximum: 10000000, default: 0 },
       },
     },
   },
@@ -898,7 +901,7 @@ async function indoorPatientRoutes(fastify) {
     try {
       const _id = toObjectId(req.params.id);
       if (!_id) return reply.code(400).send({ error: "Invalid patient ID" });
-      const { type, itemId, name, price, quantity, note, schemaId } = req.body;
+      const { type, itemId, name, price, quantity, note, schemaId, commission } = req.body;
 
       const addedAt = now();
       const addedBy = by(req);
@@ -913,6 +916,8 @@ async function indoorPatientRoutes(fastify) {
             price,
             quantity,
             total: price * quantity,
+            // Only tests carry a commission, same as the invoice schema.
+            commission: type === "test" ? commission || 0 : 0,
             note: note ?? "",
             addedAt,
             addedBy,

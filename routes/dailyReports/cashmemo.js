@@ -52,6 +52,7 @@ const EMPTY_IPD_SUMMARY = () => ({
   discountCount: 0,
   discountPatientCount: 0,
   totalCollected: 0,
+  totalCommission: 0,
   deletedCount: 0,
   totalAmountDeleted: 0,
   paymentModeBreakdown: EMPTY_PAYMENT_MODE_BREAKDOWN(),
@@ -94,7 +95,7 @@ const ipdSummaryQuerySchema = {
   schema: {
     tags: ["Cashmemo"],
     summary:
-      "Get IPD revenue-cycle summary for a date range — census, ALOS, billed/collected/due, collection rate, revenue by category, discounts, deletions",
+      "Get IPD revenue-cycle summary for a date range — census, ALOS, billed/collected/due, collection rate, revenue by category, discounts, commission, deletions",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
@@ -219,6 +220,10 @@ async function cashmemoRoutes(fastify) {
   // Active-invoice figures (totalInvoices/initial/paid/etc.) are scoped by
   // createdAt in range — that's "business done in this window".
   //
+  // referrerCommission (%-based) and referrerCommissionTestWise (sum of each
+  // test's own commission amount) are both summed here so the client can
+  // toggle between the two views without a second request.
+  //
   // Deleted-invoice figures (deletedCount/totalAmountDeleted) are scoped by
   // deletion.at in range instead, NOT createdAt. A deletion is reported
   // against the window it happened in, regardless of when the invoice was
@@ -260,6 +265,7 @@ async function cashmemoRoutes(fastify) {
                   labAdjustment: { $sum: { $ifNull: ["$amount.labAdjustment", 0] } },
                   referrerDiscount: { $sum: { $ifNull: ["$amount.referrerDiscount", 0] } },
                   referrerCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
+                  referrerCommissionTestWise: { $sum: { $ifNull: ["$amount.referrerCommissionTestWise", 0] } },
                   totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
                   totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                   totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
@@ -273,6 +279,7 @@ async function cashmemoRoutes(fastify) {
                   labAdjustment: 1,
                   referrerDiscount: 1,
                   referrerCommission: 1,
+                  referrerCommissionTestWise: 1,
                   totalFinal: 1,
                   totalNet: 1,
                   totalPaid: 1,
@@ -335,6 +342,7 @@ async function cashmemoRoutes(fastify) {
         labAdjustment: 0,
         referrerDiscount: 0,
         referrerCommission: 0,
+        referrerCommissionTestWise: 0,
         totalFinal: 0,
         totalNet: 0,
         totalPaid: 0,
@@ -397,12 +405,17 @@ async function cashmemoRoutes(fastify) {
   // Revenue-cycle view for IPD, built around the metrics an actual hospital
   // finance dashboard tracks: current census, patient flow (admissions/
   // discharges), average length of stay, billed vs. collected vs. due,
-  // collection rate, revenue mix by category, payment-mode breakdown, and
-  // soft-deleted admissions.
+  // collection rate, revenue mix by category, payment-mode breakdown,
+  // referrer commission, and soft-deleted admissions.
   //
   //   revenue figures  → activity-based: expenses/discounts/payments whose
   //                      own timestamp (addedAt/appliedAt/collectedAt) falls
   //                      in [startDate, endDate]
+  //   totalCommission  → sum of expenses[].commission for expenses added in
+  //                      range (same activity-based window as totalBilled).
+  //                      NOTE: unlike outdoor invoices, IPD admissions don't
+  //                      store a referrer commission %, so there is no
+  //                      percentage-based figure here — this is test-wise only.
   //   paymentModeBreakdown → same activity-based convention, scoped by
   //                      payments.collectedAt in range. Mirrors the outdoor
   //                      /cashmemo/summary paymentModeBreakdown exactly, just
@@ -417,7 +430,7 @@ async function cashmemoRoutes(fastify) {
   // All aggregations/queries below (except the deleted one, which is the
   // mirror-image) are scoped to non-deleted patients only (notDeletedFilter),
   // so a soft-deleted admission never contributes to billed/collected/
-  // discount/census/flow/paymentMode figures.
+  // discount/commission/census/flow/paymentMode figures.
   //
   // NOTE: totalBilled reflects itemized expenses only (test/medicine/product/
   // service/other) — bed charges accrue daily rather than as dated ledger
@@ -446,7 +459,7 @@ async function cashmemoRoutes(fastify) {
         currentlyAdmitted,
         deletedResult,
       ] = await Promise.all([
-        // ── Expenses added in range — revenue mix by category ──────────────
+        // ── Expenses added in range — revenue mix by category + commission ─
         ipdCol()
           .aggregate(
             [
@@ -497,6 +510,7 @@ async function cashmemoRoutes(fastify) {
                       ],
                     },
                   },
+                  commissionAmount: { $sum: { $ifNull: ["$expenses.commission", 0] } },
                 },
               },
               {
@@ -507,6 +521,7 @@ async function cashmemoRoutes(fastify) {
                   medicineAmount: 1,
                   productAmount: 1,
                   otherAmount: 1,
+                  commissionAmount: 1,
                 },
               },
             ],
@@ -648,6 +663,7 @@ async function cashmemoRoutes(fastify) {
         medicineAmount: 0,
         productAmount: 0,
         otherAmount: 0,
+        commissionAmount: 0,
       };
       const discounts = discountsResult[0] ?? { totalDiscounts: 0, discountCount: 0, discountPatientCount: 0 };
       const payments = paymentsResult[0] ?? { totalCollected: 0, paymentCount: 0 };
@@ -659,6 +675,7 @@ async function cashmemoRoutes(fastify) {
       const totalBilled = Math.round(expenses.totalBilled);
       const totalDiscounts = Math.round(discounts.totalDiscounts);
       const totalCollected = Math.round(payments.totalCollected);
+      const totalCommission = Math.round(expenses.commissionAmount);
 
       return reply.send({
         currentlyAdmitted,
@@ -676,6 +693,7 @@ async function cashmemoRoutes(fastify) {
         discountCount: discounts.discountCount,
         discountPatientCount: discounts.discountPatientCount,
         totalCollected,
+        totalCommission,
         deletedCount: deleted.deletedCount,
         totalAmountDeleted: Math.round(deleted.totalAmountDeleted),
         paymentModeBreakdown: buildPaymentModeBreakdown(paymentModeResult),
