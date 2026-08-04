@@ -423,11 +423,11 @@ async function indoorPatientRoutes(fastify) {
   const requireAddExpense = { onRequest: [fastify.authorize("addExpenseToPatient")] };
   const requireDelete = { onRequest: [fastify.authorize("deletePatient")] };
   const requireRelease = { onRequest: [fastify.authorize("releasePatient")] };
-  const requireDiscount = { onRequest: [fastify.authorize("applyDiscountToPatient")] };
+  const requireDiscount = { onRequest: [fastify.authorize("discount")] };
   // Previously unguarded — added to match the authorization pattern used by every
   // other mutating route on this collection. Register these permission keys in
   // the role/permission schema if they don't already exist.
-  const requireEditInfo = { onRequest: [fastify.authorize("editPatientInfo")] };
+  const requireEdit = { onRequest: [fastify.authorize("editPatient")] };
   const requireTransferWard = { onRequest: [fastify.authorize("transferPatientWard")] };
   const requireChangeDoctor = { onRequest: [fastify.authorize("changePatientDoctor")] };
 
@@ -663,7 +663,7 @@ async function indoorPatientRoutes(fastify) {
   // ── PATCH /indoor-patient/:id/patient-info ───────────────────────────────────
   fastify.patch(
     "/indoor-patient/:id/patient-info",
-    { ...updatePatientInfoSchema, ...requireEditInfo },
+    { ...updatePatientInfoSchema, ...requireEdit },
     async (req, reply) => {
       try {
         const _id = toObjectId(req.params.id);
@@ -704,7 +704,7 @@ async function indoorPatientRoutes(fastify) {
   // ── PATCH /indoor-patient/:id/clinical-notes ─────────────────────────────────
   fastify.patch(
     "/indoor-patient/:id/clinical-notes",
-    { ...updateClinicalNotesSchema, ...requireEditInfo },
+    { ...updateClinicalNotesSchema, ...requireEdit },
     async (req, reply) => {
       try {
         const _id = toObjectId(req.params.id);

@@ -10,6 +10,21 @@ async function outdoorReportRoutes(fastify, options) {
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
+ // ── GET /schema/:schemaId ─────────────────────────────────────────────────
+  fastify.get("/report/testSchema/:schemaId", async (req, reply) => {
+    try {
+      const _id = toObjectId(req.params.schemaId);
+      if (!_id) return reply.code(400).send({ error: "Invalid schema ID" });
+
+      const schema = await fastify.mongo.db.collection("testSchemas").findOne({ _id });
+      if (!schema) return reply.code(404).send({ error: "Schema not found" });
+      return reply.send(schema);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch schema" });
+    }
+  });
+
   // ============================================================================
   // POST /report/add
   // Body: { report, invoiceId, testId }
