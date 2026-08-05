@@ -67,6 +67,7 @@ const summaryQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -83,6 +84,7 @@ const outdoorDeletedInvoicesQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -99,6 +101,7 @@ const ipdSummaryQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -114,6 +117,7 @@ const ipdDiscountPatientsQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -129,6 +133,7 @@ const ipdAdmittedPatientsQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -144,6 +149,7 @@ const ipdReleasedPatientsQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -167,6 +173,7 @@ const ipdDeletedPatientsQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -182,6 +189,7 @@ const expenseSummaryQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -223,6 +231,11 @@ async function cashmemoRoutes(fastify) {
   // referrerCommission (%-based) and referrerCommissionTestWise (sum of each
   // test's own commission amount) are both summed here so the client can
   // toggle between the two views without a second request.
+  //
+  // totalInvoiceFee sums amount.invoiceFee across active invoices created in
+  // range — the online-report fee (added on top of the patient's total, per
+  // the createdAt-scoped "business done in this window" convention as the
+  // rest of this block, not activity-based like collections/deletions below).
   //
   // Deleted-invoice figures (deletedCount/totalAmountDeleted) are scoped by
   // deletion.at in range instead, NOT createdAt. A deletion is reported
@@ -269,6 +282,7 @@ async function cashmemoRoutes(fastify) {
                   totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
                   totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                   totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },
+                  totalInvoiceFee: { $sum: { $ifNull: ["$amount.invoiceFee", 0] } },
                 },
               },
               {
@@ -283,6 +297,7 @@ async function cashmemoRoutes(fastify) {
                   totalFinal: 1,
                   totalNet: 1,
                   totalPaid: 1,
+                  totalInvoiceFee: 1,
                   totalDue: { $max: [0, { $subtract: ["$totalFinal", "$totalPaid"] }] },
                 },
               },
@@ -346,6 +361,7 @@ async function cashmemoRoutes(fastify) {
         totalFinal: 0,
         totalNet: 0,
         totalPaid: 0,
+        totalInvoiceFee: 0,
         totalDue: 0,
       };
 
@@ -437,6 +453,9 @@ async function cashmemoRoutes(fastify) {
   // entries, so they aren't attributable to a specific reporting window with
   // the current schema. Bed charge shows up in the per-patient outstanding
   // (AR) endpoint below, where it's computed against "as of now".
+  //
+  // IPD admissions have no invoiceFee concept (that's an outdoor-invoice-only
+  // field) — no equivalent figure here.
   //
   // diagnosticCenter labs have no IPD module — short-circuit before ever
   // touching the indoorPatients collection for them.

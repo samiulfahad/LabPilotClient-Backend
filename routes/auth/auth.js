@@ -2,8 +2,8 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import toObjectId from "../../utils/db.js";
 
-// labKey is always a 4-digit string, e.g. "0472"
-const LAB_KEY_PATTERN = /^\d{4}$/;
+// labKey is a 1-to-5-digit string, e.g. "1", "472", "04721"
+const LAB_KEY_PATTERN = /^\d{1,5}$/;
 const isValidLabKey = (labKey) => typeof labKey === "string" && LAB_KEY_PATTERN.test(labKey.trim());
 
 // OTP guess-limiting for /reset-password — a 6-digit OTP is only 1,000,000
@@ -19,19 +19,83 @@ const toBillingClaim = (lab) => ({
   forceInvoiceFee: !!lab?.billing?.forceInvoiceFee,
 });
 
+const deviceSchemaProps = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    browser: { type: "string", maxLength: 100 },
+    browserVersion: { type: "string", maxLength: 50 },
+    os: { type: "string", maxLength: 100 },
+    osVersion: { type: "string", maxLength: 50 },
+    deviceType: { type: "string", maxLength: 50 },
+    screenRes: { type: "string", maxLength: 50 },
+    timezone: { type: "string", maxLength: 100 },
+    language: { type: "string", maxLength: 50 },
+  },
+};
+
+const loginSchema = {
+  schema: {
+    tags: ["Auth"],
+    summary: "Login",
+    body: {
+      type: "object",
+      required: ["labKey", "phone", "password"],
+      additionalProperties: false,
+      properties: {
+        labKey: { type: "string", pattern: "^\\d{1,5}$" },
+        phone: { type: "string", pattern: "^01[0-9]{9}$" },
+        password: { type: "string", minLength: 1, maxLength: 100 },
+        device: deviceSchemaProps,
+      },
+    },
+  },
+};
+
+const forgotPasswordSchema = {
+  schema: {
+    tags: ["Auth"],
+    summary: "Request OTP for password reset",
+    body: {
+      type: "object",
+      required: ["phone", "labKey"],
+      additionalProperties: false,
+      properties: {
+        phone: { type: "string", pattern: "^01[0-9]{9}$" },
+        labKey: { type: "string", pattern: "^\\d{1,5}$" },
+      },
+    },
+  },
+};
+
+const resetPasswordSchema = {
+  schema: {
+    tags: ["Auth"],
+    summary: "Reset password using OTP",
+    body: {
+      type: "object",
+      required: ["phone", "labKey", "otp", "newPassword"],
+      additionalProperties: false,
+      properties: {
+        phone: { type: "string", pattern: "^01[0-9]{9}$" },
+        labKey: { type: "string", pattern: "^\\d{1,5}$" },
+        otp: { type: "string", pattern: "^\\d{6}$" },
+        newPassword: { type: "string", minLength: 6, maxLength: 60 },
+      },
+    },
+  },
+};
+
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
   const otpCollection = () => fastify.mongo.db.collection("otps");
 
   // ── POST /login ───────────────────────────────────────────────────────────
-  fastify.post("/login", async (req, reply) => {
+  fastify.post("/login", loginSchema, async (req, reply) => {
     const { labKey, phone, password, device } = req.body || {};
-    if (!labKey || !phone || !password) {
-      return reply.code(400).send({ error: "Missing required fields" });
-    }
     if (!isValidLabKey(labKey)) {
-      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
+      return reply.code(400).send({ error: "Lab Key must be a 1-to-5-digit code" });
     }
 
     const staff = await staffsCollection().findOne({ labKey: String(labKey).trim(), phone });
@@ -136,13 +200,10 @@ async function authRoutes(fastify) {
   });
 
   // ── POST /forgot-password ─────────────────────────────────────────────────
-  fastify.post("/forgot-password", async (req, reply) => {
+  fastify.post("/forgot-password", forgotPasswordSchema, async (req, reply) => {
     const { phone, labKey } = req.body || {};
-    if (!phone || !labKey) {
-      return reply.code(400).send({ error: "Phone and Lab Key are required" });
-    }
     if (!isValidLabKey(labKey)) {
-      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
+      return reply.code(400).send({ error: "Lab Key must be a 1-to-5-digit code" });
     }
     const normalizedLabKey = String(labKey).trim();
 
@@ -190,16 +251,10 @@ async function authRoutes(fastify) {
   });
 
   // ── POST /reset-password ──────────────────────────────────────────────────
-  fastify.post("/reset-password", async (req, reply) => {
+  fastify.post("/reset-password", resetPasswordSchema, async (req, reply) => {
     const { phone, labKey, otp, newPassword } = req.body || {};
-    if (!phone || !labKey || !otp || !newPassword) {
-      return reply.code(400).send({ error: "All fields are required" });
-    }
     if (!isValidLabKey(labKey)) {
-      return reply.code(400).send({ error: "Lab Key must be a 4-digit code" });
-    }
-    if (newPassword.length < 6) {
-      return reply.code(400).send({ error: "Password must be at least 6 characters" });
+      return reply.code(400).send({ error: "Lab Key must be a 1-to-5-digit code" });
     }
     const normalizedLabKey = String(labKey).trim();
 
@@ -223,8 +278,18 @@ async function authRoutes(fastify) {
     }
 
     if (record.otp !== fastify.hashToken(otp)) {
+      const newAttempts = record.attempts + 1;
+      const attemptsLeft = MAX_OTP_ATTEMPTS - newAttempts;
+
+      if (attemptsLeft <= 0) {
+        // Last attempt just used — invalidate immediately instead of making
+        // the client find out on a wasted 6th request.
+        await otpCollection().deleteOne({ _id: record._id });
+        return reply.code(429).send({ error: "Too many incorrect attempts. Please request a new OTP." });
+      }
+
       await otpCollection().updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
-      return reply.code(400).send({ error: "Invalid or expired OTP" });
+      return reply.code(400).send({ error: "Invalid or expired OTP", attemptsLeft });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);

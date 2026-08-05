@@ -223,7 +223,7 @@ async function admissionSpaceRoutes(fastify) {
       return reply.code(403).send({ error: "Indoor patient management is only available for hospital labs" });
     }
   });
-  fastify.addHook("onRequest", fastify.requireAdmin);
+   fastify.addHook("onRequest", fastify.authorize("manageAdmissionSpace"));
 
   // ── GET /spaces ─────────────────────────────────────────────────────────────
   fastify.get("/spaces", getAllSpacesSchema, async (req, reply) => {

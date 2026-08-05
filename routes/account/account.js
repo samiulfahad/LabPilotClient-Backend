@@ -11,7 +11,7 @@ const changePhoneSchema = {
       required: ["phone", "currentPassword"],
       additionalProperties: false,
       properties: {
-        phone: { type: "string", minLength: 10, maxLength: 15 },
+        phone: { type: "string", pattern: "^01[0-9]{9}$" },
         currentPassword: { type: "string", minLength: 1 },
       },
     },

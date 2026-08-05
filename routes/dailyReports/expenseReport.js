@@ -5,11 +5,12 @@ import toObjectId from "../../utils/db.js";
 
 const expenseSummaryQuerySchema = {
   schema: {
-    tags: ["Test Stats"],
+    tags: ["Expense Report"],
     summary: "Get expense totals grouped by type for a date range",
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },
@@ -38,22 +39,25 @@ async function expenseReportRoutes(fastify) {
       if (startDate > endDate) return reply.code(400).send({ error: "startDate must be before endDate" });
 
       const result = await expensesCol()
-        .aggregate([
-          {
-            $match: {
-              labId: labId(req),
-              createdAt: { $gte: startDate, $lte: endDate },
-              "deletion.status": false,
+        .aggregate(
+          [
+            {
+              $match: {
+                labId: labId(req),
+                createdAt: { $gte: startDate, $lte: endDate },
+                "deletion.status": false,
+              },
             },
-          },
-          {
-            $group: {
-              _id: "$type",
-              total: { $sum: "$amount" },
-              count: { $sum: 1 },
+            {
+              $group: {
+                _id: "$type",
+                total: { $sum: "$amount" },
+                count: { $sum: 1 },
+              },
             },
-          },
-        ])
+          ],
+          { allowDiskUse: true },
+        )
         .toArray();
 
       // Built entirely from whatever types show up in the aggregation — no hardcoded

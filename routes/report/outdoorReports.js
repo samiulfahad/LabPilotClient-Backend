@@ -1,6 +1,119 @@
+/**
+ * outdoorReportRoutes.js
+ *
+ * Structure mirrors invoiceRoutes.js: Constants → Helpers → Route Schemas → Routes.
+ *
+ * Cleanup notes:
+ *  - GET /report/testSchema/:schemaId is intentionally left WITHOUT a permission
+ *    gate and WITHOUT a labId filter — testSchemas is shared reference data (report
+ *    templates), not a lab-scoped collection, so there's nothing tenant-specific to
+ *    leak by _id lookup. Revisit only if testSchemas ever becomes lab-owned.
+ *  - All other routes (add, update, dates, get-by-invoice) are gated on
+ *    testReportUpload / testReportDownload, unchanged.
+ */
+
 import toObjectId from "../../utils/db.js";
 
-async function outdoorReportRoutes(fastify, options) {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const findTestIndex = (tests, testId) => (tests ?? []).findIndex((t) => t.testId.toString() === testId.toString());
+
+// sampleCollectionDate/reportDate are set independently of the report body
+// (via PUT /report/dates) and must survive being overwritten whenever the
+// report content itself is added or updated.
+const mergeReportDates = (existingReport, incomingReport) => ({
+  ...incomingReport,
+  ...(existingReport?.sampleCollectionDate !== undefined && {
+    sampleCollectionDate: existingReport.sampleCollectionDate,
+  }),
+  ...(existingReport?.reportDate !== undefined && {
+    reportDate: existingReport.reportDate,
+  }),
+});
+
+// ─── Route Schemas ────────────────────────────────────────────────────────────
+
+const getSchemaParamSchema = {
+  schema: {
+    tags: ["Outdoor Reports"],
+    summary: "Get a test report schema by ID",
+    params: {
+      type: "object",
+      required: ["schemaId"],
+      properties: {
+        schemaId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the schema" },
+      },
+    },
+  },
+};
+
+const addReportSchema = {
+  schema: {
+    tags: ["Outdoor Reports"],
+    summary: "Add a report to a not-yet-completed test on an invoice",
+    body: {
+      type: "object",
+      required: ["report", "invoiceId", "testId"],
+      properties: {
+        report: { type: "object", description: "Report data keyed by schema field name" },
+        invoiceId: { type: "string", minLength: 7, maxLength: 7, description: "Invoice ID" },
+        testId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the test" },
+      },
+    },
+  },
+};
+
+const updateReportSchema = {
+  schema: {
+    tags: ["Outdoor Reports"],
+    summary: "Update the report for a test on an invoice",
+    body: {
+      type: "object",
+      required: ["report", "invoiceId", "testId"],
+      properties: {
+        report: { type: "object", description: "Report data keyed by schema field name" },
+        invoiceId: { type: "string", minLength: 7, maxLength: 7, description: "Invoice ID" },
+        testId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the test" },
+      },
+    },
+  },
+};
+
+const updateDatesSchema = {
+  schema: {
+    tags: ["Outdoor Reports"],
+    summary: "Update sample collection / report dates for a test — works before or after report submission",
+    body: {
+      type: "object",
+      required: ["invoiceId", "testId"],
+      properties: {
+        invoiceId: { type: "string", minLength: 7, maxLength: 7, description: "Invoice ID" },
+        testId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the test" },
+        sampleCollectionDate: { type: "integer", description: "Unix timestamp (ms) of sample collection" },
+        reportDate: { type: "integer", description: "Unix timestamp (ms) the report was finalized" },
+      },
+    },
+  },
+};
+
+const getReportSchema = {
+  schema: {
+    tags: ["Outdoor Reports"],
+    summary: "Get the report + patient info for a test on an invoice",
+    params: {
+      type: "object",
+      required: ["invoiceId", "testId"],
+      properties: {
+        invoiceId: { type: "string", minLength: 7, maxLength: 7, description: "Invoice ID" },
+        testId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the test" },
+      },
+    },
+  },
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+async function outdoorReportRoutes(fastify) {
   const invoicesCollection = () => fastify.mongo.db.collection("invoices");
   const labId = (req) => toObjectId(req.user.labId);
   const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
@@ -10,8 +123,10 @@ async function outdoorReportRoutes(fastify, options) {
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
- // ── GET /schema/:schemaId ─────────────────────────────────────────────────
-  fastify.get("/report/testSchema/:schemaId", async (req, reply) => {
+  // ── GET /report/testSchema/:schemaId ────────────────────────────────────
+  // Intentionally unguarded — see header cleanup notes: shared reference
+  // data, not lab-scoped.
+  fastify.get("/report/testSchema/:schemaId", getSchemaParamSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.schemaId);
       if (!_id) return reply.code(400).send({ error: "Invalid schema ID" });
@@ -25,43 +140,22 @@ async function outdoorReportRoutes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // POST /report/add
-  // Body: { report, invoiceId, testId }
-  // ============================================================================
-  fastify.post("/report/add", { ...requireUpload }, async (req, reply) => {
+  // ── POST /report/add ────────────────────────────────────────────────────
+  fastify.post("/report/add", { ...addReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
-      if (!report || !invoiceId || !testId) {
-        return reply.code(400).send({ error: "report, invoiceId and testId are required" });
-      }
-
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
-      if (!invoice) {
-        return reply.code(404).send({ error: "Invoice not found" });
-      }
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const testIndex = invoice.tests.findIndex((t) => t.testId.toString() === testId.toString());
-
-      if (testIndex === -1) {
-        return reply.code(404).send({ error: "Test not found in this invoice" });
-      }
+      const testIndex = findTestIndex(invoice.tests, testId);
+      if (testIndex === -1) return reply.code(404).send({ error: "Test not found in this invoice" });
 
       if (invoice.tests[testIndex].isCompleted) {
         return reply.code(400).send({ error: "Report already submitted for this test. Use update instead." });
       }
 
-      const existingReport = invoice.tests[testIndex].report ?? {};
-      const reportWithDates = {
-        ...report,
-        ...(existingReport.sampleCollectionDate !== undefined && {
-          sampleCollectionDate: existingReport.sampleCollectionDate,
-        }),
-        ...(existingReport.reportDate !== undefined && {
-          reportDate: existingReport.reportDate,
-        }),
-      };
+      const reportWithDates = mergeReportDates(invoice.tests[testIndex].report, report);
 
       const result = await invoicesCollection().updateOne(
         { invoiceId, labId: labId(req) },
@@ -75,10 +169,7 @@ async function outdoorReportRoutes(fastify, options) {
         },
       );
 
-      if (result.modifiedCount === 0) {
-        return reply.code(400).send({ error: "Failed to save report" });
-      }
-
+      if (result.modifiedCount === 0) return reply.code(400).send({ error: "Failed to save report" });
       return reply.code(201).send({ success: true });
     } catch (error) {
       req.log.error(error);
@@ -86,39 +177,18 @@ async function outdoorReportRoutes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PUT /report/update
-  // Body: { report, invoiceId, testId }
-  // ============================================================================
-  fastify.put("/report/update", { ...requireUpload }, async (req, reply) => {
+  // ── PUT /report/update ──────────────────────────────────────────────────
+  fastify.put("/report/update", { ...updateReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
-      if (!report || !invoiceId || !testId) {
-        return reply.code(400).send({ error: "report, invoiceId and testId are required" });
-      }
-
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
-      if (!invoice) {
-        return reply.code(404).send({ error: "Invoice not found" });
-      }
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const testIndex = invoice.tests.findIndex((t) => t.testId.toString() === testId.toString());
+      const testIndex = findTestIndex(invoice.tests, testId);
+      if (testIndex === -1) return reply.code(404).send({ error: "Test not found in this invoice" });
 
-      if (testIndex === -1) {
-        return reply.code(404).send({ error: "Test not found in this invoice" });
-      }
-
-      const existingReport = invoice.tests[testIndex].report ?? {};
-      const reportWithDates = {
-        ...report,
-        ...(existingReport.sampleCollectionDate !== undefined && {
-          sampleCollectionDate: existingReport.sampleCollectionDate,
-        }),
-        ...(existingReport.reportDate !== undefined && {
-          reportDate: existingReport.reportDate,
-        }),
-      };
+      const reportWithDates = mergeReportDates(invoice.tests[testIndex].report, report);
 
       const result = await invoicesCollection().updateOne(
         { invoiceId, labId: labId(req) },
@@ -132,10 +202,7 @@ async function outdoorReportRoutes(fastify, options) {
         },
       );
 
-      if (result.modifiedCount === 0) {
-        return reply.code(400).send({ error: "Failed to update report" });
-      }
-
+      if (result.modifiedCount === 0) return reply.code(400).send({ error: "Failed to update report" });
       return reply.send({ success: true });
     } catch (error) {
       req.log.error(error);
@@ -143,35 +210,23 @@ async function outdoorReportRoutes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // PUT /report/dates
-  // Body: { invoiceId, testId, sampleCollectionDate?, reportDate? }
-  // Works regardless of whether the report has been submitted yet
-  // ============================================================================
-  fastify.put("/report/dates", { ...requireUpload }, async (req, reply) => {
+  // ── PUT /report/dates ───────────────────────────────────────────────────
+  // Works regardless of whether the report has been submitted yet.
+  fastify.put("/report/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { invoiceId, testId, sampleCollectionDate, reportDate } = req.body;
-
-      if (!invoiceId || !testId) {
-        return reply.code(400).send({ error: "invoiceId and testId are required" });
-      }
 
       if (sampleCollectionDate === undefined && reportDate === undefined) {
         return reply.code(400).send({ error: "At least one of sampleCollectionDate or reportDate is required" });
       }
 
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
-      if (!invoice) {
-        return reply.code(404).send({ error: "Invoice not found" });
-      }
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const testIndex = invoice.tests.findIndex((t) => t.testId.toString() === testId.toString());
+      const testIndex = findTestIndex(invoice.tests, testId);
+      if (testIndex === -1) return reply.code(404).send({ error: "Test not found in this invoice" });
 
-      if (testIndex === -1) {
-        return reply.code(404).send({ error: "Test not found in this invoice" });
-      }
-
-      // Parity with indoor-report/dates — offline tests (no schemaId) don't support report dates
+      // Parity with indoor-report/dates — offline tests (no schemaId) don't support report dates.
       if (!invoice.tests[testIndex].schemaId) {
         return reply.code(400).send({ error: "This test is offline and does not support report dates" });
       }
@@ -185,11 +240,7 @@ async function outdoorReportRoutes(fastify, options) {
       }
 
       const result = await invoicesCollection().updateOne({ invoiceId, labId: labId(req) }, { $set: dateFields });
-
-      if (result.modifiedCount === 0) {
-        return reply.code(400).send({ error: "Failed to update dates" });
-      }
-
+      if (result.modifiedCount === 0) return reply.code(400).send({ error: "Failed to update dates" });
       return reply.send({ success: true });
     } catch (error) {
       req.log.error(error);
@@ -197,24 +248,17 @@ async function outdoorReportRoutes(fastify, options) {
     }
   });
 
-  // ============================================================================
-  // GET /report/:invoiceId/:testId
-  // Returns the report + patient info from the parent invoice
-  // ============================================================================
-  fastify.get("/report/:invoiceId/:testId", { ...requireDownload }, async (req, reply) => {
+  // ── GET /report/:invoiceId/:testId ──────────────────────────────────────
+  // Returns the report + patient info from the parent invoice.
+  fastify.get("/report/:invoiceId/:testId", { ...getReportSchema, ...requireDownload }, async (req, reply) => {
     try {
       const { invoiceId, testId } = req.params;
 
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
-      if (!invoice) {
-        return reply.code(404).send({ error: "Invoice not found" });
-      }
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
       const test = invoice.tests.find((t) => t.testId.toString() === testId.toString());
-
-      if (!test) {
-        return reply.code(404).send({ error: "Test not found in this invoice" });
-      }
+      if (!test) return reply.code(404).send({ error: "Test not found in this invoice" });
 
       return reply.send({
         report: test.report,

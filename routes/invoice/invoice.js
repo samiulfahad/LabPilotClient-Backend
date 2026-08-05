@@ -164,7 +164,14 @@ const paginationQuerySchema = {
   },
 };
 
-// ─── Schemas ──────────────────────────────────────────────────────────────────
+// ─── Route Schemas ────────────────────────────────────────────────────────────
+
+const requiredDataSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Fetch referrers, tests and products needed to create an invoice",
+  },
+};
 
 const addInvoiceSchema = {
   schema: {
@@ -286,17 +293,15 @@ const addInvoiceSchema = {
   },
 };
 
-const patientInfoSchema = {
+const searchInvoiceSchema = {
   schema: {
     tags: ["Invoices"],
-    summary: "Update patient info on an invoice",
-    params: invoiceIdParamSchema,
-    body: {
+    summary: "Search invoices by phone, invoiceId, or patient name",
+    querystring: {
       type: "object",
-      required: ["patient"],
-      additionalProperties: false,
+      required: ["q"],
       properties: {
-        patient: patientBodySchema,
+        q: { type: "string", minLength: 1, maxLength: 100 },
       },
     },
   },
@@ -331,6 +336,70 @@ const collectDueSchema = {
   },
 };
 
+const listInvoicesSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Get paginated list of active invoices",
+    querystring: paginationQuerySchema,
+  },
+};
+
+const deletedInvoicesSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Get paginated list of deleted invoices",
+    querystring: paginationQuerySchema,
+  },
+};
+
+const getInvoiceSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Get invoice by ID for the print/share view",
+    params: invoiceIdParamSchema,
+  },
+};
+
+const reportSummarySchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Get invoice report summary for printing or sharing",
+    params: invoiceIdParamSchema,
+  },
+};
+
+const patientInfoSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Update patient info on an invoice",
+    params: invoiceIdParamSchema,
+    body: {
+      type: "object",
+      required: ["patient"],
+      additionalProperties: false,
+      properties: {
+        patient: patientBodySchema,
+      },
+    },
+  },
+};
+
+const markDeliveredSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Mark an invoice as delivered",
+    params: invoiceIdParamSchema,
+  },
+};
+
+const deleteInvoiceSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Soft delete an invoice",
+    params: invoiceIdParamSchema,
+  },
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function invoiceRoutes(fastify) {
@@ -339,55 +408,44 @@ async function invoiceRoutes(fastify) {
   const userId = (req) => toObjectId(req.user.id);
 
   fastify.addHook("onRequest", fastify.authenticate);
-  fastify.addHook("onRequest", fastify.requireModule("invoice"));
 
   const requireCreate = { onRequest: [fastify.authorize("createInvoice")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteInvoice")] };
-  const requireSalesReport = { onRequest: [fastify.authorize("salesReport")] };
+  const requireInvoiceList = { onRequest: [fastify.authorize("invoiceList")] };
 
-  // ── GET /invoice/required-data ────────────────────────────────────────────
-  fastify.get(
-    "/invoice/required-data",
-    {
-      ...requireCreate,
-      schema: {
-        tags: ["Invoices"],
-        summary: "Fetch referrers, tests and products needed to create an invoice",
-      },
-    },
-    async (req, reply) => {
-      try {
-        const [referrers, tests, products] = await Promise.all([
-          fastify.mongo.db
-            .collection("referrers")
-            .find(
-              { labId: labId(req) },
-              { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
-            )
-            .sort({ name: 1 })
-            .toArray(),
-          fastify.mongo.db
-            .collection("tests")
-            .find(
-              { labId: labId(req) },
-              { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1, commission: 1 } },
-            )
-            .sort({ createdAt: -1 })
-            .toArray(),
-          fastify.mongo.db
-            .collection("products")
-            .find({ labId: labId(req) }, { projection: { name: 1, type: 1, price: 1, hasStock: 1, stock: 1 } })
-            .sort({ name: 1 })
-            .toArray(),
-        ]);
+  // ── GET /invoice/required-data ──────────────────────────────────────────────
+  fastify.get("/invoice/required-data", { ...requiredDataSchema, ...requireCreate }, async (req, reply) => {
+    try {
+      const [referrers, tests, products] = await Promise.all([
+        fastify.mongo.db
+          .collection("referrers")
+          .find(
+            { labId: labId(req) },
+            { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
+          )
+          .sort({ name: 1 })
+          .toArray(),
+        fastify.mongo.db
+          .collection("tests")
+          .find(
+            { labId: labId(req) },
+            { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1, commission: 1 } },
+          )
+          .sort({ createdAt: -1 })
+          .toArray(),
+        fastify.mongo.db
+          .collection("products")
+          .find({ labId: labId(req) }, { projection: { name: 1, type: 1, price: 1, hasStock: 1, stock: 1 } })
+          .sort({ name: 1 })
+          .toArray(),
+      ]);
 
-        return reply.send({ referrers, tests, products });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch required data" });
-      }
-    },
-  );
+      return reply.send({ referrers, tests, products });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch required data" });
+    }
+  });
 
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
@@ -605,68 +663,54 @@ async function invoiceRoutes(fastify) {
     }
   });
 
-  // ── GET /invoice/search ───────────────────────────────────────────────────
-  fastify.get(
-    "/invoice/search",
-    {
-      schema: {
-        tags: ["Invoices"],
-        summary: "Search invoices by phone, invoiceId, or patient name",
-        querystring: {
-          type: "object",
-          required: ["q"],
-          properties: {
-            q: { type: "string", minLength: 1, maxLength: 100 },
-          },
-        },
-      },
-    },
-    async (req, reply) => {
-      try {
-        const q = req.query.q.trim();
-        const isPhone = /^\d{7,15}$/.test(q);
-        const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
+  // ── GET /invoice/search ────────────────────────────────────────────────────
+  // Intentionally unguarded — see header cleanup notes: patient-lookup flows
+  // that aren't gated by "invoiceList" on the frontend depend on this route.
+  fastify.get("/invoice/search", searchInvoiceSchema, async (req, reply) => {
+    try {
+      const q = req.query.q.trim();
+      const isPhone = /^\d{7,15}$/.test(q);
+      const isInvoiceId = /^[A-NP-Z]{3}[1-9]{4}$/i.test(q);
 
-        const baseMatch = { labId: labId(req), "deletion.status": false };
+      const baseMatch = { labId: labId(req), "deletion.status": false };
 
-        let filter;
-        if (isPhone) {
-          filter = { ...baseMatch, "patient.contactNumber": q };
-        } else if (isInvoiceId) {
-          filter = { ...baseMatch, invoiceId: q.toUpperCase() };
-        } else {
-          filter = { ...baseMatch, "patient.name": { $regex: q, $options: "i" } };
-        }
-
-        const results = await col()
-          .find(filter, {
-            projection: {
-              _id: 1,
-              invoiceId: 1,
-              createdAt: 1,
-              "createdBy.name": 1,
-              "delivery.status": 1,
-              "patient.name": 1,
-              "patient.gender": 1,
-              "patient.age": 1,
-              "patient.contactNumber": 1,
-              "amount.final": 1,
-              "amount.paid": 1,
-              "tests.schemaId": 1,
-              paymentMode: 1,
-            },
-          })
-          .sort({ createdAt: -1 })
-          .limit(30)
-          .toArray();
-
-        return reply.send({ results, type: isPhone ? "phone" : isInvoiceId ? "invoiceId" : "name" });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Search failed" });
+      let filter;
+      if (isPhone) {
+        filter = { ...baseMatch, "patient.contactNumber": q };
+      } else if (isInvoiceId) {
+        filter = { ...baseMatch, invoiceId: q.toUpperCase() };
+      } else {
+        filter = { ...baseMatch, "patient.name": { $regex: q, $options: "i" } };
       }
-    },
-  );
+
+      const results = await col()
+        .find(filter, {
+          projection: {
+            _id: 1,
+            invoiceId: 1,
+            createdAt: 1,
+            "createdBy.name": 1,
+            "delivery.status": 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "tests.schemaId": 1,
+            paymentMode: 1,
+          },
+        })
+        .sort({ createdAt: -1 })
+        .limit(30)
+        .toArray();
+
+      return reply.send({ results, type: isPhone ? "phone" : isInvoiceId ? "invoiceId" : "name" });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Search failed" });
+    }
+  });
 
   // ── PATCH /invoice/:invoiceId/collect-due ─────────────────────────────────
   // Collects a payment against the outstanding due amount. The amount is
@@ -675,6 +719,9 @@ async function invoiceRoutes(fastify) {
   // invoice's *current* due, never trusting the client's number as-is:
   //   - never negative (schema requires > 0; also floored at 0 defensively)
   //   - never more than the actual due amount at the moment of the update
+  //
+  // Intentionally unguarded — see header cleanup notes: no "collectPayment"
+  // permission key exists yet (mirrors indoorPatients' /payment route).
   fastify.patch("/invoice/:invoiceId/collect-due", collectDueSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
@@ -727,214 +774,180 @@ async function invoiceRoutes(fastify) {
     }
   });
 
-  // ── GET /invoice/all ──────────────────────────────────────────────────────
-  fastify.get(
-    "/invoice/all",
-    {
-      ...requireSalesReport,
-      schema: {
-        tags: ["Invoices"],
-        summary: "Get paginated list of active invoices",
-        querystring: paginationQuerySchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
+  // ── GET /invoice/all ───────────────────────────────────────────────────────
+  fastify.get("/invoice/all", { ...listInvoicesSchema, ...requireInvoiceList }, async (req, reply) => {
+    try {
+      const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
 
-        const result = await col()
-          .find(
-            {
-              labId: labId(req),
-              "deletion.status": false,
-              ...buildCursorFilter({ cursor, startDate, endDate }),
+      const result = await col()
+        .find(
+          {
+            labId: labId(req),
+            "deletion.status": false,
+            ...buildCursorFilter({ cursor, startDate, endDate }),
+          },
+          {
+            projection: {
+              _id: 1,
+              invoiceId: 1,
+              createdAt: 1,
+              "createdBy.name": 1,
+              "delivery.status": 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "tests.schemaId": 1,
+              paymentMode: 1,
             },
-            {
-              projection: {
-                _id: 1,
-                invoiceId: 1,
-                createdAt: 1,
-                "createdBy.name": 1,
-                "delivery.status": 1,
-                "patient.name": 1,
-                "patient.gender": 1,
-                "patient.age": 1,
-                "patient.contactNumber": 1,
-                "amount.final": 1,
-                "amount.paid": 1,
-                "tests.schemaId": 1,
-                paymentMode: 1,
-              },
-            },
-          )
-          .sort({ createdAt: -1 })
-          .limit(limit + 1)
-          .toArray();
+          },
+        )
+        .sort({ createdAt: -1 })
+        .limit(limit + 1)
+        .toArray();
 
-        return reply.send(paginatedResponse(result, limit, "createdAt"));
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch invoices" });
-      }
-    },
-  );
+      return reply.send(paginatedResponse(result, limit, "createdAt"));
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch invoices" });
+    }
+  });
 
-  // ── GET /invoice/deleted ──────────────────────────────────────────────────
-  fastify.get(
-    "/invoice/deleted",
-    {
-      ...requireSalesReport,
-      schema: {
-        tags: ["Invoices"],
-        summary: "Get paginated list of deleted invoices",
-        querystring: paginationQuerySchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
-        const result = await col()
-          .find(
-            {
-              labId: labId(req),
-              "deletion.status": true,
-              ...buildCursorFilter({ cursor, startDate, endDate, field: "deletion.at" }),
+  // ── GET /invoice/deleted ───────────────────────────────────────────────────
+  fastify.get("/invoice/deleted", { ...deletedInvoicesSchema, ...requireDelete }, async (req, reply) => {
+    try {
+      const { limit, cursor, startDate, endDate } = parsePaginationQuery(req.query);
+      const result = await col()
+        .find(
+          {
+            labId: labId(req),
+            "deletion.status": true,
+            ...buildCursorFilter({ cursor, startDate, endDate, field: "deletion.at" }),
+          },
+          {
+            projection: {
+              _id: 1,
+              invoiceId: 1,
+              createdAt: 1,
+              "deletion.by.name": 1,
+              "deletion.at": 1,
+              "patient.name": 1,
+              "patient.gender": 1,
+              "patient.age": 1,
+              "patient.contactNumber": 1,
+              "amount.final": 1,
+              "amount.paid": 1,
+              "tests.schemaId": 1,
+              paymentMode: 1,
             },
-            {
-              projection: {
-                _id: 1,
-                invoiceId: 1,
-                createdAt: 1,
-                "deletion.by.name": 1,
-                "deletion.at": 1,
-                "patient.name": 1,
-                "patient.gender": 1,
-                "patient.age": 1,
-                "patient.contactNumber": 1,
-                "amount.final": 1,
-                "amount.paid": 1,
-                "tests.schemaId": 1,
-                paymentMode: 1,
-              },
-            },
-          )
-          .sort({ "deletion.at": -1 })
-          .limit(limit + 1)
-          .toArray();
-        return reply.send(paginatedResponse(result, limit, "deletion.at"));
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch deleted invoices" });
-      }
-    },
-  );
+          },
+        )
+        .sort({ "deletion.at": -1 })
+        .limit(limit + 1)
+        .toArray();
+      return reply.send(paginatedResponse(result, limit, "deletion.at"));
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch deleted invoices" });
+    }
+  });
 
-  // ── GET /invoice/:invoiceId ───────────────────────────────────────────────
+  // ── GET /invoice/:invoiceId ────────────────────────────────────────────────
   // FIX: previously returned the full raw document (no projection) — leaked
   // internal fields (labId, labKey, createdBy, deletion, collections history,
   // test commissions, referrer id, etc.) to whatever consumes this route
   // (PrintInvoice.jsx's print/share view). Project down to exactly what
   // normaliseInvoice() in that component reads.
-  fastify.get(
-    "/invoice/:invoiceId",
-    {
-      schema: {
-        tags: ["Invoices"],
-        summary: "Get invoice by ID for the print/share view",
-        params: invoiceIdParamSchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const invoice = await col().findOne(
-          { invoiceId: req.params.invoiceId, labId: labId(req) },
-          {
-            projection: {
-              _id: 0,
-              invoiceId: 1,
-              createdAt: 1,
-              "patient.name": 1,
-              "patient.gender": 1,
-              "patient.age": 1,
-              "patient.contactNumber": 1,
-              "referrer.name": 1,
-              "referrer.type": 1,
-              "tests.name": 1,
-              "tests.price": 1,
-              "products.name": 1,
-              "products.price": 1,
-              "products.quantity": 1,
-              "amount.initial": 1,
-              "amount.referrerDiscount": 1,
-              "amount.labAdjustment": 1,
-              "amount.final": 1,
-              "amount.paid": 1,
-              "amount.invoiceFee": 1,
-              paymentMode: 1,
-            },
+  //
+  // Intentionally unguarded — see header cleanup notes: powers the print/share
+  // view, which isn't gated by "invoiceList" on the frontend.
+  fastify.get("/invoice/:invoiceId", getInvoiceSchema, async (req, reply) => {
+    try {
+      const invoice = await col().findOne(
+        { invoiceId: req.params.invoiceId, labId: labId(req) },
+        {
+          projection: {
+            _id: 0,
+            invoiceId: 1,
+            createdAt: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "referrer.name": 1,
+            "referrer.type": 1,
+            "tests.name": 1,
+            "tests.price": 1,
+            "products.name": 1,
+            "products.price": 1,
+            "products.quantity": 1,
+            "amount.initial": 1,
+            "amount.referrerDiscount": 1,
+            "amount.labAdjustment": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "amount.invoiceFee": 1,
+            paymentMode: 1,
           },
-        );
-        if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+        },
+      );
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-        // `link` isn't a stored field — it's derived from invoiceId the same
-        // way POST /invoice/add returns it at creation time. Reconstruct it
-        // here so PrintInvoice.jsx's normaliseInvoice() has reportLink/link
-        // to fall back on when it fetches by ID directly (not via router state).
-        return reply.send({ ...invoice, link: `https://labpilotpro.com/${invoice.invoiceId}` });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch invoice" });
-      }
-    },
-  );
+      // `link` isn't a stored field — it's derived from invoiceId the same
+      // way POST /invoice/add returns it at creation time. Reconstruct it
+      // here so PrintInvoice.jsx's normaliseInvoice() has reportLink/link
+      // to fall back on when it fetches by ID directly (not via router state).
+      return reply.send({ ...invoice, link: `https://labpilotpro.com/${invoice.invoiceId}` });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch invoice" });
+    }
+  });
 
   // ── GET /invoice/:invoiceId/report-summary ────────────────────────────────
-  fastify.get(
-    "/invoice/:invoiceId/report-summary",
-    {
-      schema: {
-        tags: ["Invoices"],
-        summary: "Get invoice report summary for printing or sharing",
-        params: invoiceIdParamSchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const invoice = await col().findOne(
-          { invoiceId: req.params.invoiceId, labId: labId(req) },
-          {
-            projection: {
-              _id: 0,
-              invoiceId: 1,
-              createdAt: 1,
-              "patient.name": 1,
-              "patient.gender": 1,
-              "patient.age": 1,
-              "patient.contactNumber": 1,
-              "amount.initial": 1,
-              "amount.final": 1,
-              "amount.paid": 1,
-              "tests.testId": 1,
-              "tests.name": 1,
-              "tests.price": 1,
-              "tests.schemaId": 1,
-              "tests.isCompleted": 1,
-              "tests.report.sampleCollectionDate": 1,
-              "tests.report.reportDate": 1,
-              paymentMode: 1,
-            },
+  // Intentionally unguarded — see header cleanup notes: powers report
+  // printing/sharing, same as GET /invoice/:invoiceId above.
+  fastify.get("/invoice/:invoiceId/report-summary", reportSummarySchema, async (req, reply) => {
+    try {
+      const invoice = await col().findOne(
+        { invoiceId: req.params.invoiceId, labId: labId(req) },
+        {
+          projection: {
+            _id: 0,
+            invoiceId: 1,
+            createdAt: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.initial": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "tests.testId": 1,
+            "tests.name": 1,
+            "tests.price": 1,
+            "tests.schemaId": 1,
+            "tests.isCompleted": 1,
+            "tests.report.sampleCollectionDate": 1,
+            "tests.report.reportDate": 1,
+            paymentMode: 1,
           },
-        );
-        if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-        return reply.send(invoice);
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to fetch invoice summary" });
-      }
-    },
-  );
+        },
+      );
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      return reply.send(invoice);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch invoice summary" });
+    }
+  });
 
   // ── PATCH /invoice/:invoiceId/patient-info ────────────────────────────────
+  // Intentionally unguarded — see header cleanup notes: no analogous unused
+  // permission key exists to attach here (unlike indoorPatients' patient-info,
+  // which could reuse an already-defined but unused "editPatient" key).
   fastify.patch("/invoice/:invoiceId/patient-info", patientInfoSchema, async (req, reply) => {
     try {
       const { invoiceId } = req.params;
@@ -965,80 +978,61 @@ async function invoiceRoutes(fastify) {
   });
 
   // ── PATCH /invoice/:invoiceId/mark-delivered ──────────────────────────────
-  fastify.patch(
-    "/invoice/:invoiceId/mark-delivered",
-    {
-      schema: {
-        tags: ["Invoices"],
-        summary: "Mark an invoice as delivered",
-        params: invoiceIdParamSchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const { invoiceId } = req.params;
+  // Intentionally unguarded — see header cleanup notes: no matching permission
+  // key exists yet for delivery-status changes.
+  fastify.patch("/invoice/:invoiceId/mark-delivered", markDeliveredSchema, async (req, reply) => {
+    try {
+      const { invoiceId } = req.params;
 
-        const invoice = await col().findOne({ invoiceId, labId: labId(req) }, { projection: { "delivery.status": 1 } });
-        if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-        if (invoice.delivery.status) return reply.code(400).send({ error: "Invoice already marked as delivered" });
+      const invoice = await col().findOne({ invoiceId, labId: labId(req) }, { projection: { "delivery.status": 1 } });
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      if (invoice.delivery.status) return reply.code(400).send({ error: "Invoice already marked as delivered" });
 
-        await col().updateOne(
-          { invoiceId, labId: labId(req) },
-          {
-            $set: {
-              delivery: {
-                status: true,
-                by: { id: userId(req), name: req.user.name },
-              },
+      await col().updateOne(
+        { invoiceId, labId: labId(req) },
+        {
+          $set: {
+            delivery: {
+              status: true,
+              by: { id: userId(req), name: req.user.name },
             },
           },
-        );
-        return reply.send({ success: true });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to mark invoice as delivered" });
-      }
-    },
-  );
+        },
+      );
+      return reply.send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to mark invoice as delivered" });
+    }
+  });
 
   // ── PATCH /invoice/:invoiceId/delete ──────────────────────────────────────
-  fastify.patch(
-    "/invoice/:invoiceId/delete",
-    {
-      ...requireDelete,
-      schema: {
-        tags: ["Invoices"],
-        summary: "Soft delete an invoice",
-        params: invoiceIdParamSchema,
-      },
-    },
-    async (req, reply) => {
-      try {
-        const { invoiceId } = req.params;
+  fastify.patch("/invoice/:invoiceId/delete", { ...deleteInvoiceSchema, ...requireDelete }, async (req, reply) => {
+    try {
+      const { invoiceId } = req.params;
 
-        const invoice = await col().findOne({ invoiceId, labId: labId(req) }, { projection: { "deletion.status": 1 } });
-        if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-        if (invoice.deletion.status) return reply.code(400).send({ error: "Invoice already deleted" });
+      const invoice = await col().findOne({ invoiceId, labId: labId(req) }, { projection: { "deletion.status": 1 } });
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      if (invoice.deletion.status) return reply.code(400).send({ error: "Invoice already deleted" });
 
-        await col().updateOne(
-          { invoiceId, labId: labId(req) },
-          {
-            $set: {
-              deletion: {
-                status: true,
-                at: Date.now(),
-                by: { id: userId(req), name: req.user.name },
-              },
+      await col().updateOne(
+        { invoiceId, labId: labId(req) },
+        {
+          $set: {
+            deletion: {
+              status: true,
+              at: Date.now(),
+              by: { id: userId(req), name: req.user.name },
             },
           },
-        );
-        return reply.send({ success: true });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(500).send({ error: "Failed to delete invoice" });
-      }
-    },
-  );
+        },
+      );
+      return reply.send({ success: true });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to delete invoice" });
+    }
+  });
 }
 
 export default invoiceRoutes;

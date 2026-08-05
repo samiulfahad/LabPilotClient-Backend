@@ -1,4 +1,38 @@
+/**
+ * myActivityRoutes.js
+ *
+ * Cleanup notes (see audit, mirroring invoiceRoutes.js):
+ *  - All three routes below (summary, invoices, collections) are intentionally left
+ *    WITHOUT a permission gate. Unlike other collections, there is no meaningful
+ *    permission to gate on here: every route is hard-scoped to req.user.id — a staff
+ *    member can only ever see their own collection/invoice activity, never another
+ *    user's. Gating "view your own activity" behind a permission key would just lock
+ *    staff out of their own dashboard for no security benefit. Revisit only if a
+ *    future requirement needs e.g. a manager viewing another staff member's activity.
+ */
+
 import toObjectId from "../../utils/db.js";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+// Payments and invoices are queried in [startDate, endDate], but the parent
+// invoice/admission doc can have been created well before that window (e.g. an
+// old invoice getting a due collected today). LOOKBACK_MS widens the initial
+// $match on createdAt/admittedAt so we don't miss those parents before the
+// $unwind + inner date match narrows back down to the requested range.
+const LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// collectedBy.id / addedBy.id on indoorPatients docs is inconsistently
+// stored as a raw string in some records instead of ObjectId (write-path
+// bug — ids should be normalized with toObjectId() before insert). Until
+// that's fixed at the source, match both forms here.
+const userIdMatch = (field, userObjectId, userIdRaw) => ({
+  $or: [{ [field]: userObjectId }, { [field]: userIdRaw }],
+});
+
+// ─── Route Schemas ────────────────────────────────────────────────────────────
 
 const summaryQuerySchema = {
   schema: {
@@ -15,23 +49,34 @@ const summaryQuerySchema = {
   },
 };
 
+const invoicesQuerySchema = {
+  schema: {
+    tags: ["My Activity"],
+    summary: "Get OPD invoices created by the logged-in staff for a date range",
+    querystring: summaryQuerySchema.schema.querystring,
+  },
+};
+
+const collectionsQuerySchema = {
+  schema: {
+    tags: ["My Activity"],
+    summary: "Get all payments collected by the logged-in staff for a date range (OPD + IPD, merged)",
+    querystring: summaryQuerySchema.schema.querystring,
+  },
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
 async function myActivityRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("invoices");
   const indoorCol = () => fastify.mongo.db.collection("indoorPatients");
   const labId = (req) => toObjectId(req.user.labId);
-  const LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
 
   fastify.addHook("onRequest", fastify.authenticate);
 
-  // collectedBy.id / addedBy.id on indoorPatients docs is inconsistently
-  // stored as a raw string in some records instead of ObjectId (write-path
-  // bug — ids should be normalized with toObjectId() before insert). Until
-  // that's fixed at the source, match both forms here.
-  const userIdMatch = (field, userObjectId, userIdRaw) => ({
-    $or: [{ [field]: userObjectId }, { [field]: userIdRaw }],
-  });
-
   // ── GET /my-activity/summary ────────────────────────────────────────────
+  // Intentionally unguarded — see header cleanup notes: hard-scoped to
+  // req.user.id, so there's nothing to gate.
   fastify.get("/my-activity/summary", summaryQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);
     const endDate = parseInt(req.query.endDate);
@@ -114,7 +159,8 @@ async function myActivityRoutes(fastify) {
 
   // ── GET /my-activity/invoices ───────────────────────────────────────────
   // OPD invoices created by this staff in range — minimal projection.
-  fastify.get("/my-activity/invoices", summaryQuerySchema, async (req, reply) => {
+  // Intentionally unguarded — see header cleanup notes.
+  fastify.get("/my-activity/invoices", invoicesQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);
     const endDate = parseInt(req.query.endDate);
 
@@ -154,7 +200,8 @@ async function myActivityRoutes(fastify) {
   // ── GET /my-activity/collections ────────────────────────────────────────
   // All payments this staff collected in range — OPD invoice collections +
   // IPD payments, merged into one flat list with a `source` tag.
-  fastify.get("/my-activity/collections", summaryQuerySchema, async (req, reply) => {
+  // Intentionally unguarded — see header cleanup notes.
+  fastify.get("/my-activity/collections", collectionsQuerySchema, async (req, reply) => {
     const startDate = parseInt(req.query.startDate);
     const endDate = parseInt(req.query.endDate);
 

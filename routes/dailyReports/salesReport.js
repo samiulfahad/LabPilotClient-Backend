@@ -10,6 +10,7 @@ const salesReportQuerySchema = {
     querystring: {
       type: "object",
       required: ["startDate", "endDate"],
+      additionalProperties: false,
       properties: {
         startDate: { type: "integer", description: "Start date as Unix timestamp (ms)" },
         endDate: { type: "integer", description: "End date as Unix timestamp (ms)" },

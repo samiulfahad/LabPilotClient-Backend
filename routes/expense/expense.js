@@ -38,17 +38,20 @@ const paginatedResponse = (result, limit, cursorField) => {
 // ─── Reusable Schema Definitions ─────────────────────────────────────────────
 
 const EXPENSE_TYPES = ["staffSalary", "medicine", "testKit", "products", "commission", "others"];
+const OBJECT_ID_PATTERN = "^[a-fA-F0-9]{24}$";
 
 const expenseIdParamSchema = {
   type: "object",
   required: ["expenseId"],
+  additionalProperties: false,
   properties: {
-    expenseId: { type: "string", minLength: 24, maxLength: 24, description: "ObjectId of the expense" },
+    expenseId: { type: "string", pattern: OBJECT_ID_PATTERN, description: "ObjectId of the expense" },
   },
 };
 
 const paginationQuerySchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     limit: { type: "integer", minimum: 1, maximum: 100, description: "Number of results per page (max 100)" },
     cursor: { type: "integer", minimum: 0, description: "Timestamp cursor for pagination" },
@@ -110,11 +113,10 @@ async function expenseRoutes(fastify) {
   const userId = (req) => toObjectId(req.user.id);
 
   fastify.addHook("onRequest", fastify.authenticate);
-  fastify.addHook("onRequest", fastify.requireModule("expense"));
 
   const requireCreate = { onRequest: [fastify.authorize("addExpense")] };
   const requireDelete = { onRequest: [fastify.authorize("deleteExpense")] };
-  const requireExpenseReport = { onRequest: [fastify.authorize("expenseReport")] };
+  const requireExpenseList = { onRequest: [fastify.authorize("expenseList")] };
 
   // ── POST /expense/add ─────────────────────────────────────────────────────
   fastify.post("/expense/add", { ...addExpenseSchema, ...requireCreate }, async (req, reply) => {
@@ -235,7 +237,7 @@ async function expenseRoutes(fastify) {
   fastify.get(
     "/expense/all",
     {
-      ...requireExpenseReport,
+      ...requireExpenseList,
       schema: {
         tags: ["Expenses"],
         summary: "Get paginated list of active expenses (optionally filtered by type / timeframe)",
@@ -285,7 +287,7 @@ async function expenseRoutes(fastify) {
   fastify.get(
     "/expense/deleted",
     {
-      ...requireExpenseReport,
+      ...requireDelete,
       schema: {
         tags: ["Expenses"],
         summary: "Get paginated list of soft-deleted expenses",
