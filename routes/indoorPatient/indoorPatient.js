@@ -1232,6 +1232,41 @@ async function indoorPatientRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to delete patient" });
     }
   });
+
+  // Dependency API Call
+  // ──GET Required Data while adding items to a patient────────────────────────────────────────────
+  fastify.get("/indoor-patients/add-items/required-data", async (req, reply) => {
+    try {
+      const [referrers, tests, products] = await Promise.all([
+        fastify.mongo.db
+          .collection("referrers")
+          .find(
+            { labId: labId(req) },
+            { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1, type: 1 } },
+          )
+          .sort({ name: 1 })
+          .toArray(),
+        fastify.mongo.db
+          .collection("tests")
+          .find(
+            { labId: labId(req) },
+            { projection: { _id: 0, name: 1, price: 1, testId: 1, schemaId: 1, commission: 1 } },
+          )
+          .sort({ createdAt: -1 })
+          .toArray(),
+        fastify.mongo.db
+          .collection("products")
+          .find({ labId: labId(req) }, { projection: { name: 1, type: 1, price: 1, hasStock: 1, stock: 1 } })
+          .sort({ name: 1 })
+          .toArray(),
+      ]);
+
+      return reply.send({ referrers, tests, products });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch required data for adding items to indoor patient" });
+    }
+  });
 }
 
 export default indoorPatientRoutes;

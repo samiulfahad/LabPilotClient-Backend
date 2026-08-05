@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import toObjectId from "../../utils/db.js";
+import { ALLOWED_PERMISSIONS } from "../staticData/staticData.js";
 
 const changePhoneSchema = {
   schema: {
@@ -267,6 +268,10 @@ async function accountRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to update email" });
     }
   });
+
+  // Dependent Calls
+  // ── GET /staff-permissions ────────────────────────────────────────────────
+  fastify.get("/account/staff-permissions", async (_req, reply) => reply.send({ permissions: ALLOWED_PERMISSIONS }));
 }
 
 export default accountRoutes;
