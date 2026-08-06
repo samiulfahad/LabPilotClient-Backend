@@ -128,7 +128,6 @@ async function authRoutes(fastify) {
     const grantedPermissions = Object.fromEntries(
       Object.entries(staff.permissions || {}).filter(([, value]) => value === true),
     );
-
     const payload = {
       id: staff._id.toString(),
       name: staff.name,
