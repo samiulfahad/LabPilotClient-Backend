@@ -360,13 +360,6 @@ const getInvoiceSchema = {
   },
 };
 
-const reportSummarySchema = {
-  schema: {
-    tags: ["Invoices"],
-    summary: "Get invoice report summary for printing or sharing",
-    params: invoiceIdParamSchema,
-  },
-};
 
 const patientInfoSchema = {
   schema: {
@@ -903,44 +896,6 @@ async function invoiceRoutes(fastify) {
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch invoice" });
-    }
-  });
-
-  // ── GET /invoice/:invoiceId/report-summary ────────────────────────────────
-  // Intentionally unguarded — see header cleanup notes: powers report
-  // printing/sharing, same as GET /invoice/:invoiceId above.
-  fastify.get("/invoice/:invoiceId/report-summary", reportSummarySchema, async (req, reply) => {
-    try {
-      const invoice = await col().findOne(
-        { invoiceId: req.params.invoiceId, labId: labId(req) },
-        {
-          projection: {
-            _id: 0,
-            invoiceId: 1,
-            createdAt: 1,
-            "patient.name": 1,
-            "patient.gender": 1,
-            "patient.age": 1,
-            "patient.contactNumber": 1,
-            "amount.initial": 1,
-            "amount.final": 1,
-            "amount.paid": 1,
-            "tests.testId": 1,
-            "tests.name": 1,
-            "tests.price": 1,
-            "tests.schemaId": 1,
-            "tests.isCompleted": 1,
-            "tests.report.sampleCollectionDate": 1,
-            "tests.report.reportDate": 1,
-            paymentMode: 1,
-          },
-        },
-      );
-      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-      return reply.send(invoice);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(500).send({ error: "Failed to fetch invoice summary" });
     }
   });
 

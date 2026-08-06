@@ -123,10 +123,45 @@ async function outdoorReportRoutes(fastify) {
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
+  // GET Patient
+    fastify.get("/outdoorReport/:invoiceId", async (req, reply) => {
+    try {
+      const { invoiceId } = req.params;
+      const invoice = await fastify.mongo.db.collection("invoices").findOne(
+        { invoiceId: req.params.invoiceId, labId: labId(req) },
+        {
+          projection: {
+            _id: 0,
+            invoiceId: 1,
+            createdAt: 1,
+            "patient.name": 1,
+            "patient.gender": 1,
+            "patient.age": 1,
+            "patient.contactNumber": 1,
+            "amount.initial": 1,
+            "amount.final": 1,
+            "amount.paid": 1,
+            "tests.testId": 1,
+            "tests.name": 1,
+            "tests.price": 1,
+            "tests.schemaId": 1,
+            "tests.isCompleted": 1,
+            "tests.report.sampleCollectionDate": 1,
+            "tests.report.reportDate": 1,
+            paymentMode: 1,
+          },
+        },
+      );
+      if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+      return reply.send(invoice);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch invoice summary" });
+    }
+  });
+
   // ── GET /report/testSchema/:schemaId ────────────────────────────────────
-  // Intentionally unguarded — see header cleanup notes: shared reference
-  // data, not lab-scoped.
-  fastify.get("/report/testSchema/:schemaId", getSchemaParamSchema, async (req, reply) => {
+  fastify.get("/outdoorReport/testSchema/:schemaId", getSchemaParamSchema, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.schemaId);
       if (!_id) return reply.code(400).send({ error: "Invalid schema ID" });
@@ -141,7 +176,7 @@ async function outdoorReportRoutes(fastify) {
   });
 
   // ── POST /report/add ────────────────────────────────────────────────────
-  fastify.post("/report/add", { ...addReportSchema, ...requireUpload }, async (req, reply) => {
+  fastify.post("/outdoorReport/add", { ...addReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -178,7 +213,7 @@ async function outdoorReportRoutes(fastify) {
   });
 
   // ── PUT /report/update ──────────────────────────────────────────────────
-  fastify.put("/report/update", { ...updateReportSchema, ...requireUpload }, async (req, reply) => {
+  fastify.put("/outdoorReport/update", { ...updateReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, invoiceId, testId } = req.body;
 
@@ -212,7 +247,7 @@ async function outdoorReportRoutes(fastify) {
 
   // ── PUT /report/dates ───────────────────────────────────────────────────
   // Works regardless of whether the report has been submitted yet.
-  fastify.put("/report/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
+  fastify.put("/outdoorReport/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { invoiceId, testId, sampleCollectionDate, reportDate } = req.body;
 
@@ -250,7 +285,7 @@ async function outdoorReportRoutes(fastify) {
 
   // ── GET /report/:invoiceId/:testId ──────────────────────────────────────
   // Returns the report + patient info from the parent invoice.
-  fastify.get("/report/:invoiceId/:testId", { ...getReportSchema, ...requireDownload }, async (req, reply) => {
+  fastify.get("/outdoorReport/:invoiceId/:testId", { ...getReportSchema, ...requireDownload }, async (req, reply) => {
     try {
       const { invoiceId, testId } = req.params;
 

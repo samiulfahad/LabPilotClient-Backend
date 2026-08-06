@@ -11,6 +11,7 @@
  */
 
 import toObjectId from "../../utils/db.js";
+const notDeletedFilter = (req) => ({ labId: toObjectId(req.user.labId), "deletion.at": null });
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ const findReportIndex = (reports, testId, addedAt) =>
   (reports ?? []).findIndex((r) => r.testId?.toString() === testId.toString() && r.addedAt === Number(addedAt));
 
 // sampleCollectionDate/reportDate are set independently of the report body
-// (via PUT /indoor-report/dates) and must survive being overwritten whenever
+// (via PUT /indoorReport/dates) and must survive being overwritten whenever
 // the report content itself is added or updated.
 const mergeReportDates = (existingReport, incomingReport) => ({
   ...incomingReport,
@@ -131,9 +132,53 @@ async function indoorReportRoutes(fastify) {
   const requireDownload = { onRequest: [fastify.authorize("testReportDownload")] };
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
-  // ── POST /indoor-report/add ─────────────────────────────────────────────
+  // ── GET patient Data /indoorReport/:admissionId ────────────────────────
+  fastify.get(
+    "/indoorReport/:admissionId",
+    {
+      schema: {
+        tags: ["IndoorPatients"],
+        summary: "Get indoor patient by human-readable admission ID",
+        params: {
+          type: "object",
+          required: ["admissionId"],
+          additionalProperties: false,
+          properties: {
+            admissionId: {
+              type: "string",
+              pattern: "^[Ii][Pp][1-9]{3}[A-NP-Za-np-z]{2}$",
+              minLength: 7,
+              maxLength: 7,
+            },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const patient = await fastify.mongo.db.collection("indoorPatients").findOne(
+          { admissionId: req.params.admissionId.toUpperCase(), ...notDeletedFilter(req) },
+          {
+            projection: {
+              admissionId: 1,
+              status: 1,
+              patient: 1,
+              reports: 1,
+            },
+          },
+        );
+        if (!patient) return reply.code(404).send({ error: "Indoor patient not found" });
+        return reply.send(patient);
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(500).send({ error: "Failed to fetch indoor patient" });
+      }
+    },
+  );
+
+  // ── POST /indoorReport/add ─────────────────────────────────────────────
   // Targets the first incomplete entry for this test — no addedAt needed.
-  fastify.post("/indoor-report/add", { ...addReportSchema, ...requireUpload }, async (req, reply) => {
+  fastify.post("/indoorReport/add", { ...addReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, patientId, testId } = req.body;
 
@@ -177,9 +222,9 @@ async function indoorReportRoutes(fastify) {
     }
   });
 
-  // ── PUT /indoor-report/update ───────────────────────────────────────────
+  // ── PUT /indoorReport/update ───────────────────────────────────────────
   // addedAt disambiguates when the same test appears multiple times.
-  fastify.put("/indoor-report/update", { ...updateReportSchema, ...requireUpload }, async (req, reply) => {
+  fastify.put("/indoorReport/update", { ...updateReportSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { report, patientId, testId, addedAt } = req.body;
 
@@ -221,8 +266,8 @@ async function indoorReportRoutes(fastify) {
     }
   });
 
-  // ── PUT /indoor-report/dates ────────────────────────────────────────────
-  fastify.put("/indoor-report/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
+  // ── PUT /indoorReport/dates ────────────────────────────────────────────
+  fastify.put("/indoorReport/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { patientId, testId, addedAt, sampleCollectionDate, reportDate } = req.body;
 
@@ -263,10 +308,10 @@ async function indoorReportRoutes(fastify) {
     }
   });
 
-  // ── GET /indoor-report/:patientId/:testId?addedAt= ─────────────────────
+  // ── GET /indoorReport/:patientId/:testId?addedAt= ─────────────────────
   // addedAt query param selects a specific entry when duplicates exist;
   // omitted, falls back to the first completed entry, else the first entry.
-  fastify.get("/indoor-report/:patientId/:testId", { ...getReportSchema, ...requireDownload }, async (req, reply) => {
+  fastify.get("/indoorReport/:patientId/:testId", { ...getReportSchema, ...requireDownload }, async (req, reply) => {
     try {
       const { patientId, testId } = req.params;
       const { addedAt } = req.query;

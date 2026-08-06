@@ -43,7 +43,6 @@ import outdoorReportRoutes from "./routes/report/outdoorReports.js";
 // Indoor Report Routes
 import indoorReportRoutes from "./routes/report/indoorReports.js";
 
-
 // Daily Report Routes
 import cashmemoRoutes from "./routes/dailyReports/cashmemo.js";
 import salesReportRoutes from "./routes/dailyReports/salesReport.js";
@@ -64,7 +63,6 @@ import staticDataRoutes from "./routes/staticData/staticData.js";
 // Internal Routes
 import internalRoutes from "./routes/internal/internal.js";
 
-
 dotenv.config();
 
 const fastify = Fastify({
@@ -82,7 +80,13 @@ await fastify.register(fastifyCookie);
 
 // ── 2. CORS
 await fastify.register(cors, {
-  origin: ["https://labpilotpro.com", "https://www.labpilotpro.com", "https://lpadmin.netlify.app", "http://localhost:5173", "http://localhost:5174"],
+  origin: [
+    "https://labpilotpro.com",
+    "https://www.labpilotpro.com",
+    "https://lpadmin.netlify.app",
+    "http://localhost:5173",
+    "http://localhost:5174",
+  ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
@@ -154,18 +158,18 @@ fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(myActivityRoutes, { prefix: API });
 
+
 // Outdoor Reports
 fastify.register(outdoorReportRoutes, { prefix: API });
 // Indoor Reports
 fastify.register(indoorReportRoutes, { prefix: API });
 
-
 fastify.register(accountRoutes, { prefix: API });
 fastify.register(billingRoutes, { prefix: API });
-fastify.register(doctorRoutes , { prefix: API });
-fastify.register(indoorPatientRoutes , { prefix: API });
-fastify.register(admissionSpaceRoutes , { prefix: API });
-fastify.register(staticDataRoutes , { prefix: API });
+fastify.register(doctorRoutes, { prefix: API });
+fastify.register(indoorPatientRoutes, { prefix: API });
+fastify.register(admissionSpaceRoutes, { prefix: API });
+fastify.register(staticDataRoutes, { prefix: API });
 
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
@@ -178,5 +182,3 @@ try {
   fastify.log.error(err);
   process.exit(1);
 }
-
-
