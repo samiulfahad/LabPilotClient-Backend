@@ -188,6 +188,7 @@ const generateTempPassword = (length = 12) => crypto.randomBytes(length).toStrin
 
 async function staffRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
+  const labsCollection = fastify.mongo.db.collection("labs");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -227,24 +228,30 @@ async function staffRoutes(fastify) {
   // ── GET /staffs ───────────────────────────────────────────────────────────
   fastify.get("/staffs", getAllStaffSchema, async (req, reply) => {
     try {
-      return collection
-        .find(
-          { labId: labId(req) },
-          {
-            projection: {
-              name: 1,
-              email: 1,
-              phone: 1,
-              permissions: 1,
-              modules: 1,
-              isActive: 1,
-              role: 1,
-              maxLabAdjustment: 1,
+      const lid = labId(req);
+      const [staffs, lab] = await Promise.all([
+        collection
+          .find(
+            { labId: lid },
+            {
+              projection: {
+                name: 1,
+                email: 1,
+                phone: 1,
+                permissions: 1,
+                modules: 1,
+                isActive: 1,
+                role: 1,
+                maxLabAdjustment: 1,
+              },
             },
-          },
-        )
-        .sort({ name: 1 })
-        .toArray();
+          )
+          .sort({ name: 1 })
+          .toArray(),
+        labsCollection.findOne({ _id: lid }, { projection: { "limit.maxStaff": 1 } }),
+      ]);
+
+      return { staffs, maxStaff: typeof lab?.limit?.maxStaff === "number" ? lab.limit.maxStaff : null };
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch staff" });
@@ -254,6 +261,30 @@ async function staffRoutes(fastify) {
   // ── POST /staff/add ───────────────────────────────────────────────────────
   fastify.post("/staff/add", createStaffSchema, async (req, reply) => {
     try {
+      const lid = labId(req);
+
+      // ── Staff seat-limit check ──────────────────────────────────────────
+      // Each lab's plan caps the number of staff (role:"staff") accounts it
+      // can register — admins are exempt, since they're a fixed account
+      // type rather than a provisioned seat. This is the authoritative
+      // check: the frontend also disables the "Add Staff" button proactively
+      // once the limit is reached, but that's UX only — this is what
+      // actually stops a direct API call from exceeding the plan's limit.
+      const lab = await labsCollection.findOne({ _id: lid }, { projection: { "limit.maxStaff": 1 } });
+      const maxStaff = lab?.limit?.maxStaff;
+
+      if (typeof maxStaff === "number") {
+        const currentStaffCount = await collection.countDocuments({ labId: lid, role: "staff" });
+        if (currentStaffCount >= maxStaff) {
+          return reply.code(403).send({
+            error: `আপনার প্ল্যানে সর্বোচ্চ ${maxStaff} জন স্টাফ যোগ করা যাবে। সীমা বাড়াতে আপনার প্ল্যান আপগ্রেড করুন।`,
+            code: "STAFF_LIMIT_REACHED",
+            limit: maxStaff,
+            current: currentStaffCount,
+          });
+        }
+      }
+
       const { name, email: rawEmail, phone: rawPhone, permissions, maxLabAdjustment } = req.body;
 
       const email = rawEmail?.trim() ? rawEmail.toLowerCase().trim() : null;
@@ -277,7 +308,7 @@ async function staffRoutes(fastify) {
       const normalizedPermissions = normalizePermissions(permissions);
 
       const result = await collection.insertOne({
-        labId: labId(req),
+        labId: lid,
         labKey: String(req.user.labKey),
         name: name.trim(),
         ...(email && { email }),

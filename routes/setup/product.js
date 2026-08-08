@@ -79,12 +79,28 @@ const updateItemInfoSchema = {
   },
 };
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ─── Per-type limit config ─────────────────────────────────────────────────────
+// Limits now live on the lab record per catalog type (limit.maxMedicine /
+// limit.maxProduct / limit.maxService), mirroring limit.maxReferrer in
+// referrerRoutes.js. null/missing means "no limit set" for that type.
 
-const LAB_PRODUCT_LIMIT = 500;
+const LIMIT_FIELD_BY_TYPE = {
+  medicine: "maxMedicine",
+  product: "maxProduct",
+  service: "maxService",
+};
+
+const TYPE_LABEL_BN = {
+  medicine: "ওষুধ",
+  product: "পণ্য",
+  service: "সেবা",
+};
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function productRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("products");
+  const labsCollection = fastify.mongo.db.collection("labs");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -114,7 +130,7 @@ async function productRoutes(fastify) {
           ];
         }
 
-        const [items, total, typeTotals] = await Promise.all([
+        const [items, total, typeTotals, lab] = await Promise.all([
           col()
             .find(filter, { projection: { labId: 0 } })
             .sort({ _id: -1 })
@@ -125,6 +141,10 @@ async function productRoutes(fastify) {
           col()
             .aggregate([{ $match: { labId: labId(req) } }, { $group: { _id: "$type", count: { $sum: 1 } } }])
             .toArray(),
+          labsCollection.findOne(
+            { _id: labId(req) },
+            { projection: { "limit.maxMedicine": 1, "limit.maxProduct": 1, "limit.maxService": 1 } },
+          ),
         ]);
 
         const totalsByType = { medicine: 0, product: 0, service: 0 };
@@ -132,11 +152,18 @@ async function productRoutes(fastify) {
           if (row._id in totalsByType) totalsByType[row._id] = row.count;
         }
 
+        const maxByType = {
+          medicine: typeof lab?.limit?.maxMedicine === "number" ? lab.limit.maxMedicine : null,
+          product: typeof lab?.limit?.maxProduct === "number" ? lab.limit.maxProduct : null,
+          service: typeof lab?.limit?.maxService === "number" ? lab.limit.maxService : null,
+        };
+
         return reply.send({
           items,
           products: items,
           pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
           totalsByType,
+          maxByType,
         });
       } catch (err) {
         req.log.error(err);
@@ -153,11 +180,24 @@ async function productRoutes(fastify) {
       try {
         const { type, name, price, description, hasStock = false, stock = 0, unitType, unitQty } = req.body;
 
-        const count = await col().countDocuments({ labId: labId(req) });
-        if (count >= LAB_PRODUCT_LIMIT) {
-          return reply.code(403).send({
-            error: `Catalog limit reached. Each lab can have a maximum of ${LAB_PRODUCT_LIMIT} items.`,
-          });
+        // ── Per-type catalog limit check ────────────────────────────────────
+        // Authoritative gate — the frontend also disables its "New Item"
+        // button once the limit is reached, but that's UX only. No
+        // "upgrade" messaging here; points the admin to contact support.
+        const limitField = LIMIT_FIELD_BY_TYPE[type];
+        const lab = await labsCollection.findOne({ _id: labId(req) }, { projection: { [`limit.${limitField}`]: 1 } });
+        const maxForType = lab?.limit?.[limitField];
+
+        if (typeof maxForType === "number") {
+          const currentCount = await col().countDocuments({ labId: labId(req), type });
+          if (currentCount >= maxForType) {
+            return reply.code(403).send({
+              error: `আপনার ল্যাবে সর্বোচ্চ ${maxForType}টি ${TYPE_LABEL_BN[type]} যোগ করা যাবে। সীমা পূর্ণ হয়েছে। সীমা বাড়াতে আমাদের সাথে যোগাযোগ করুন।`,
+              code: "CATALOG_LIMIT_REACHED",
+              limit: maxForType,
+              current: currentCount,
+            });
+          }
         }
 
         const exists = await col().findOne(

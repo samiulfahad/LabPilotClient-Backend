@@ -25,6 +25,11 @@
  *   created : { at: Number, by: { id, name } },
  *   updated : { at: Number, by: { id, name } },
  * }
+ *
+ * LIMIT CHECK (added): GET /spaces now returns { spaces, maxAdmissionSpace }
+ * instead of a bare array. POST /space/add enforces lab.limit.maxAdmissionSpace
+ * as the authoritative gate, same pattern as maxDoctor in doctorRoutes.js and
+ * maxReferrer in referrerRoutes.js.
  */
 
 import toObjectId from "../../utils/db.js";
@@ -90,7 +95,7 @@ const spaceCoreProperties = {
 const getAllSpacesSchema = {
   schema: {
     tags: ["Spaces"],
-    summary: "Get all spaces for the lab",
+    summary: "Get all spaces for the lab (with maxAdmissionSpace limit)",
     querystring: {
       type: "object",
       properties: {
@@ -207,10 +212,23 @@ const releaseBedReservationSchema = {
   },
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Coerces the lab's maxAdmissionSpace limit field to a number regardless of
+// whether it's stored as NumberInt or a string. Returns null for "no limit
+// set" (missing, null, or non-numeric) — mirrors parseMaxDoctor in
+// doctorRoutes.js.
+const parseMaxAdmissionSpace = (rawMax) => {
+  if (rawMax === undefined || rawMax === null) return null;
+  const n = Number(rawMax);
+  return isNaN(n) ? null : n;
+};
+
 // ─── Route Plugin ─────────────────────────────────────────────────────────────
 
 async function admissionSpaceRoutes(fastify) {
   const col = () => fastify.mongo.db.collection(COLLECTION);
+  const labsCollection = fastify.mongo.db.collection("labs");
   const labId = (req) => toObjectId(req.user.labId);
   const by = (req) => ({ id: toObjectId(req.user.id), name: req.user.name });
   const now = () => Date.now();
@@ -223,7 +241,7 @@ async function admissionSpaceRoutes(fastify) {
       return reply.code(403).send({ error: "Indoor patient management is only available for hospital labs" });
     }
   });
-   fastify.addHook("onRequest", fastify.authorize("manageAdmissionSpace"));
+  fastify.addHook("onRequest", fastify.authorize("manageAdmissionSpace"));
 
   // ── GET /spaces ─────────────────────────────────────────────────────────────
   fastify.get("/spaces", getAllSpacesSchema, async (req, reply) => {
@@ -233,7 +251,15 @@ async function admissionSpaceRoutes(fastify) {
         // also handles legacy docs that stored a singular `department` string
         filter.$or = [{ departments: req.query.department }, { department: req.query.department }];
       }
-      return col().find(filter).sort({ name: 1 }).toArray();
+
+      const [spaces, lab] = await Promise.all([
+        col().find(filter).sort({ name: 1 }).toArray(),
+        labsCollection.findOne({ _id: labId(req) }, { projection: { "limit.maxAdmissionSpace": 1 } }),
+      ]);
+
+      const maxAdmissionSpace = parseMaxAdmissionSpace(lab?.limit?.maxAdmissionSpace);
+
+      return reply.send({ spaces, maxAdmissionSpace });
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch spaces" });
@@ -258,6 +284,24 @@ async function admissionSpaceRoutes(fastify) {
   fastify.post("/space/add", createSpaceSchema, async (req, reply) => {
     try {
       const { name, chargePerDay, departments, multiBed, multiBedConf } = req.body;
+
+      // ── Admission space limit check ─────────────────────────────────────
+      // Authoritative gate — the frontend also disables its "New" button
+      // once the limit is reached, but that's UX only.
+      const lab = await labsCollection.findOne({ _id: labId(req) }, { projection: { "limit.maxAdmissionSpace": 1 } });
+      const maxAdmissionSpace = parseMaxAdmissionSpace(lab?.limit?.maxAdmissionSpace);
+
+      if (maxAdmissionSpace !== null) {
+        const currentCount = await col().countDocuments({ labId: labId(req) });
+        if (currentCount >= maxAdmissionSpace) {
+          return reply.code(403).send({
+            error: `আপনার ল্যাবে সর্বোচ্চ ${maxAdmissionSpace}টি কক্ষ/স্থান যোগ করা যাবে। সীমা পূর্ণ হয়েছে। সীমা বাড়াতে আমাদের সাথে যোগাযোগ করুন।`,
+            code: "ADMISSION_SPACE_LIMIT_REACHED",
+            limit: maxAdmissionSpace,
+            current: currentCount,
+          });
+        }
+      }
 
       if (multiBed && !multiBedConf) {
         return reply.code(400).send({ error: "multiBedConf is required when multiBed is true" });

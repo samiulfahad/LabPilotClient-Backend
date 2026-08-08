@@ -2,14 +2,16 @@
  * referrerRoutes.js
  *
  * Audited — no functional bugs found. Same labId scoping and percentage-cap
- * validation pattern as doctorRoutes.js. Two non-bug observations, left
- * unchanged since fixing either would change the API contract the frontend
- * already depends on:
- *  - GET /referrers has no pagination (returns the full list). Fine at
- *    current scale; revisit if referrer lists grow large. Frontend
- *    (ManageReferrer) expects a plain array in the response, so switching to
- *    a paginated {referrers,total,...} shape would require a matching
- *    frontend change.
+ * validation pattern as doctorRoutes.js.
+ *
+ * LIMIT CHECK (added): GET /referrers now returns { referrers, maxReferrer }
+ * instead of a bare array — this is a breaking response-shape change, so the
+ * frontend (ManageReferrer) has been updated to match. POST /referrer/add
+ * enforces lab.limit.maxReferrer as the authoritative gate; the frontend
+ * also disables its "New Referrer" button proactively once the limit is
+ * reached, but that's UX only.
+ *
+ * Other non-bug observations, left unchanged:
  *  - DELETE /referrer/:id is a hard delete with no reference check — same
  *    reasoning as doctorRoutes.js applies (indoorPatients denormalizes
  *    referrer name/type at admission time, so this is safe, just leaves a
@@ -125,6 +127,7 @@ const deleteReferrerSchema = {
 
 async function referrerRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
+  const labsCollection = fastify.mongo.db.collection("labs");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -133,10 +136,13 @@ async function referrerRoutes(fastify) {
   // ── GET /referrers ────────────────────────────────────────────────────────
   fastify.get("/referrers", getAllReferrersSchema, async (req, reply) => {
     try {
-      return collection
-        .find({ labId: labId(req) })
-        .sort({ name: 1 })
-        .toArray();
+      const lid = labId(req);
+      const [referrers, lab] = await Promise.all([
+        collection.find({ labId: lid }).sort({ name: 1 }).toArray(),
+        labsCollection.findOne({ _id: lid }, { projection: { "limit.maxReferrer": 1 } }),
+      ]);
+
+      return { referrers, maxReferrer: typeof lab?.limit?.maxReferrer === "number" ? lab.limit.maxReferrer : null };
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch referrers" });
@@ -146,6 +152,28 @@ async function referrerRoutes(fastify) {
   // ── POST /referrer/add ────────────────────────────────────────────────────
   fastify.post("/referrer/add", createReferrerSchema, async (req, reply) => {
     try {
+      const lid = labId(req);
+
+      // ── Referrer limit check ────────────────────────────────────────────
+      // Authoritative gate — the frontend also disables its "New Referrer"
+      // button once the limit is reached, but that's UX only. No "upgrade"
+      // messaging here; the plan doesn't self-serve this limit, so the
+      // message points the admin to contact support instead.
+      const lab = await labsCollection.findOne({ _id: lid }, { projection: { "limit.maxReferrer": 1 } });
+      const maxReferrer = lab?.limit?.maxReferrer;
+
+      if (typeof maxReferrer === "number") {
+        const currentCount = await collection.countDocuments({ labId: lid });
+        if (currentCount >= maxReferrer) {
+          return reply.code(403).send({
+            error: `আপনার ল্যাবে সর্বোচ্চ ${maxReferrer} জন রেফারার যোগ করা যাবে। সীমা পূর্ণ হয়েছে। সীমা বাড়াতে আমাদের সাথে যোগাযোগ করুন।`,
+            code: "REFERRER_LIMIT_REACHED",
+            limit: maxReferrer,
+            current: currentCount,
+          });
+        }
+      }
+
       const { name, contactNumber, degree, details, type, commissionType, commissionValue } = req.body;
 
       if (commissionType === "percentage" && commissionValue > 100) {
@@ -153,7 +181,7 @@ async function referrerRoutes(fastify) {
       }
 
       const result = await collection.insertOne({
-        labId: labId(req),
+        labId: lid,
         name,
         contactNumber,
         degree,

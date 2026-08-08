@@ -11,6 +11,13 @@
  * patient records — but it will leave a dangling doctorId that can no longer
  * be resolved if you ever try to look the doctor up again. Confirm this
  * matches intended behavior.
+ *
+ * LIMIT CHECK (added): GET /doctors now returns { ..., maxDoctor } alongside
+ * the existing paginated shape. POST /doctor/add enforces lab.limit.maxDoctor
+ * as the authoritative gate, same pattern as maxReferrer in referrerRoutes.js
+ * and maxMedicine/maxProduct/maxService in productRoutes.js. Note: in the
+ * sample lab document maxDoctor is stored as a string ('2') while the other
+ * limit fields are NumberInt — Number() coercion below handles either.
  */
 
 import toObjectId from "../../utils/db.js";
@@ -138,10 +145,20 @@ const deleteDoctorSchema = {
 const validateDepartments = (departments) => departments.filter((d) => !ALLOWED_DEPARTMENTS.has(d));
 const validateDesignation = (designation) => designation && !ALLOWED_DESIG_VALUES.has(designation);
 
+// Coerces the lab's maxDoctor limit field to a number regardless of whether
+// it's stored as NumberInt or a string (see file header note). Returns null
+// for "no limit set" (missing, null, or non-numeric).
+const parseMaxDoctor = (rawMax) => {
+  if (rawMax === undefined || rawMax === null) return null;
+  const n = Number(rawMax);
+  return isNaN(n) ? null : n;
+};
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function doctorRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
+  const labsCollection = fastify.mongo.db.collection("labs");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -170,10 +187,13 @@ async function doctorRoutes(fastify) {
         query.departments = department.trim();
       }
 
-      const [doctors, total] = await Promise.all([
+      const [doctors, total, lab] = await Promise.all([
         collection.find(query).sort({ name: 1 }).skip(skip).limit(PAGE_SIZE).toArray(),
         collection.countDocuments(query),
+        labsCollection.findOne({ _id: labId(req) }, { projection: { "limit.maxDoctor": 1 } }),
       ]);
+
+      const maxDoctor = parseMaxDoctor(lab?.limit?.maxDoctor);
 
       return reply.send({
         doctors,
@@ -181,6 +201,7 @@ async function doctorRoutes(fastify) {
         page,
         totalPages: Math.ceil(total / PAGE_SIZE),
         pageSize: PAGE_SIZE,
+        maxDoctor,
       });
     } catch (err) {
       req.log.error(err);
@@ -207,6 +228,24 @@ async function doctorRoutes(fastify) {
   fastify.post("/doctor/add", createDoctorSchema, async (req, reply) => {
     try {
       const { name, degree, contactNumber, designation, departments, commissionType, commissionValue } = req.body;
+
+      // ── Doctor limit check ──────────────────────────────────────────────
+      // Authoritative gate — the frontend also disables its "New Doctor"
+      // button once the limit is reached, but that's UX only.
+      const lab = await labsCollection.findOne({ _id: labId(req) }, { projection: { "limit.maxDoctor": 1 } });
+      const maxDoctor = parseMaxDoctor(lab?.limit?.maxDoctor);
+
+      if (maxDoctor !== null) {
+        const currentCount = await collection.countDocuments({ labId: labId(req) });
+        if (currentCount >= maxDoctor) {
+          return reply.code(403).send({
+            error: `আপনার ল্যাবে সর্বোচ্চ ${maxDoctor} জন ডাক্তার যোগ করা যাবে। সীমা পূর্ণ হয়েছে। সীমা বাড়াতে আমাদের সাথে যোগাযোগ করুন।`,
+            code: "DOCTOR_LIMIT_REACHED",
+            limit: maxDoctor,
+            current: currentCount,
+          });
+        }
+      }
 
       if (commissionType === "percentage" && commissionValue > 100)
         return reply.code(400).send({ error: "Percentage commission must be between 0 and 100" });
