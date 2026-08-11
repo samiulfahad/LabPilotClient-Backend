@@ -37,32 +37,28 @@ async function billingRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("billings");
 
   fastify.addHook("onRequest", fastify.authenticate);
-  fastify.addHook("onRequest", fastify.authorize("manageBilling"));
+
+  const requireManageBilling = { onRequest: [fastify.authorize("manageBilling")] };
 
   // ── GET /billing/status ───────────────────────────────────────────────────
   // Returns the latest unpaid bill for the authenticated lab.
+  // Intentionally NOT gated behind "manageBilling" — this powers a banner
+  // every logged-in staff member should see, not just billing admins.
+  // Backed by billingGuard's cached getBillingStatus (5-min TTL) instead of a
+  // live query, since this route gets hit on every app load / poll interval
+  // across every staff session for the lab.
   fastify.get("/billing/status", billingStatusSchema, async (req, reply) => {
     try {
-      const unpaidBill = await col().findOne(
-        { labId: toObjectId(req.user.labId), status: "unpaid" },
-        { sort: { billingPeriodStart: -1 } },
-      );
+      const status = await fastify.getBillingStatus(toObjectId(req.user.labId));
 
-      if (!unpaidBill) return reply.send({ hasUnpaidBill: false });
-
-      const isOverdue = Date.now() > unpaidBill.dueDate;
+      if (!status.hasUnpaid) return reply.send({ hasUnpaidBill: false });
 
       return reply.send({
         hasUnpaidBill: true,
-        isOverdue,
+        isOverdue: status.blocked,
         bill: {
-          id: unpaidBill._id,
-          amount: unpaidBill.totalAmount,
-          dueDate: unpaidBill.dueDate,
-          billingPeriodStart: unpaidBill.billingPeriodStart,
-          billingPeriodEnd: unpaidBill.billingPeriodEnd,
-          invoiceCount: unpaidBill.invoiceCount,
-          breakdown: unpaidBill.breakdown,
+          amount: status.amount,
+          dueDate: status.dueDate,
         },
       });
     } catch (err) {
@@ -73,7 +69,7 @@ async function billingRoutes(fastify) {
 
   // ── GET /billing/history ──────────────────────────────────────────────────
   // Returns up to 24 months of billing history for the authenticated lab.
-  fastify.get("/billing/history", billingHistorySchema, async (req, reply) => {
+  fastify.get("/billing/history", { ...billingHistorySchema, ...requireManageBilling }, async (req, reply) => {
     try {
       const bills = await col()
         .find(
@@ -105,7 +101,7 @@ async function billingRoutes(fastify) {
 
   // ── POST /billing/pay/:billingId ──────────────────────────────────────────
   // Labs pay their own bills. Replace the body with a payment gateway webhook later.
-  fastify.post("/billing/pay/:billingId", billingPaySchema, async (req, reply) => {
+  fastify.post("/billing/pay/:billingId", { ...billingPaySchema, ...requireManageBilling }, async (req, reply) => {
     try {
       const labId = toObjectId(req.user.labId);
 

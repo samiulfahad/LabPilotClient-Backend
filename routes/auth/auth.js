@@ -2,9 +2,17 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import toObjectId from "../../utils/db.js";
 
-// labKey is a 1-to-5-digit string, e.g. "1", "472", "04721"
+// labKey is a 1-to-5-digit string, e.g. "1", "472", "04721" — used as-is for
+// /forgot-password and /reset-password, which never take a suffix.
 const LAB_KEY_PATTERN = /^\d{1,5}$/;
 const isValidLabKey = (labKey) => typeof labKey === "string" && LAB_KEY_PATTERN.test(labKey.trim());
+
+// /login's labKey field additionally accepts a letters-only suffix appended
+// directly after the digits — e.g. "1112" is a normal staff login, while
+// "1112SAK" is a temporary support-admin login for lab "1112". Capture group
+// 1 is always the real labKey; group 2, when present, is the suffix and
+// routes the request to the supportAdmins collection instead of staffs.
+const LOGIN_LAB_KEY_PATTERN = /^(\d{1,5})([A-Za-z]{1,5})?$/;
 
 // OTP guess-limiting for /reset-password — a 6-digit OTP is only 1,000,000
 // combinations; without a cap, an attacker could brute-force it within its
@@ -18,6 +26,19 @@ const toBillingClaim = (lab) => ({
   feePerInvoice: lab?.billing?.feePerInvoice ?? 0,
   forceInvoiceFee: !!lab?.billing?.forceInvoiceFee,
 });
+
+const LAB_PROJECTION = {
+  name: 1,
+  labKey: 1,
+  registrationNumber: 1,
+  type: 1,
+  isActive: 1,
+  "contact.primary": 1,
+  "contact.address": 1,
+  "contact.publicEmail": 1,
+  "billing.feePerInvoice": 1,
+  "billing.forceInvoiceFee": 1,
+};
 
 const deviceSchemaProps = {
   type: "object",
@@ -43,7 +64,10 @@ const loginSchema = {
       required: ["labKey", "phone", "password"],
       additionalProperties: false,
       properties: {
-        labKey: { type: "string", pattern: "^\\d{1,5}$" },
+        // Digits for a normal login ("1112"), or digits followed by a
+        // letters-only suffix for a temporary support-admin login
+        // ("1112SAK") — parsed by LOGIN_LAB_KEY_PATTERN below.
+        labKey: { type: "string", minLength: 1, maxLength: 11, pattern: "^[0-9A-Za-z]{1,11}$" },
         phone: { type: "string", pattern: "^01[0-9]{9}$" },
         password: { type: "string", minLength: 1, maxLength: 100 },
         device: deviceSchemaProps,
@@ -88,17 +112,118 @@ const resetPasswordSchema = {
 
 async function authRoutes(fastify) {
   const staffsCollection = () => fastify.mongo.db.collection("staffs");
+  const supportAdminsCollection = () => fastify.mongo.db.collection("supportAdmins");
+  const labsCollection = () => fastify.mongo.db.collection("labs");
   const tokensCollection = () => fastify.mongo.db.collection("tokens");
   const otpCollection = () => fastify.mongo.db.collection("otps");
+
+  // Pure — builds the device/IP snapshot stored on the token doc. No DB or
+  // side effects, so both the normal and support-admin login paths can share
+  // it without risking any drift between the two.
+  const buildDeviceInfo = (req, device) => ({
+    browser: device?.browser ?? "Unknown",
+    browserVersion: device?.browserVersion ?? "",
+    os: device?.os ?? "Unknown",
+    osVersion: device?.osVersion ?? "",
+    deviceType: device?.deviceType ?? "unknown",
+    screenRes: device?.screenRes ?? "",
+    timezone: device?.timezone ?? "",
+    language: device?.language ?? "",
+    ip: req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown",
+    userAgent: req.headers["user-agent"] || "unknown",
+  });
 
   // ── POST /login ───────────────────────────────────────────────────────────
   fastify.post("/login", loginSchema, async (req, reply) => {
     const { labKey, phone, password, device } = req.body || {};
-    if (!isValidLabKey(labKey)) {
-      return reply.code(400).send({ error: "Lab Key must be a 1-to-5-digit code" });
+
+    const match = typeof labKey === "string" ? labKey.trim().match(LOGIN_LAB_KEY_PATTERN) : null;
+    if (!match) {
+      return reply
+        .code(400)
+        .send({ error: "Lab Key must be 1-5 digits, optionally followed by a letters-only suffix" });
+    }
+    const [, baseLabKey, suffix] = match;
+
+    // ── Support-admin login (labKey carries a letters suffix, e.g. "1112SAK") ──
+    if (suffix) {
+      const [admin, lab] = await Promise.all([
+        supportAdminsCollection().findOne({ labKey: baseLabKey, phone }),
+        labsCollection().findOne({ labKey: baseLabKey }, { projection: LAB_PROJECTION }),
+      ]);
+
+      const remainingMs = admin ? new Date(admin.supportAdminExpiresAt).getTime() - Date.now() : 0;
+
+      // Every check below (existence, expiry, suffix hash, password hash) is
+      // folded into one generic 401 so a wrong guess on any single part
+      // can't be distinguished from the others.
+      if (
+        !admin ||
+        !lab ||
+        remainingMs <= 0 ||
+        !admin.suffix ||
+        !(await bcrypt.compare(suffix, admin.suffix)) ||
+        !(await bcrypt.compare(password, admin.password))
+      ) {
+        return reply.code(401).send({ error: "Invalid credentials" });
+      }
+
+      const payload = {
+        id: admin._id.toString(),
+        name: admin.name,
+        role: admin.role,
+        permissions: {},
+        modules: [],
+        labKey: baseLabKey,
+        labId: lab._id.toString(),
+        type: lab.type,
+        maxLabAdjustment: 0,
+        billing: toBillingClaim(lab),
+        isSupportAdmin: true,
+      };
+
+      // Session (and both JWTs) are capped to whatever's left of the support
+      // admin's own validity window, never the standard refresh-token
+      // lifetime — so a support login can never outlive the account that
+      // was used to create it.
+      const sessionTtlMs = remainingMs;
+      const expiresIn = Math.max(1, Math.floor(sessionTtlMs / 1000));
+
+      const deviceId = randomUUID();
+      const accessToken = await reply.jwtSign(payload, { expiresIn });
+      const refreshTokenPlain = await fastify.jwt.sign(payload, {
+        key: fastify.REFRESH_SECRET,
+        expiresIn,
+      });
+
+      const sessions = await tokensCollection()
+        .find({ userId: toObjectId(payload.id) })
+        .sort({ createdAt: 1 })
+        .toArray();
+      if (sessions.length >= 5) {
+        await tokensCollection().deleteOne({ _id: sessions[0]._id });
+      }
+
+      await tokensCollection().insertOne({
+        userId: toObjectId(payload.id),
+        labId: toObjectId(payload.labId),
+        deviceId,
+        refreshToken: fastify.hashToken(refreshTokenPlain),
+        device: buildDeviceInfo(req, device),
+        createdAt: new Date(),
+        lastUsedAt: new Date(),
+        expiresAt: new Date(Date.now() + sessionTtlMs),
+      });
+
+      reply
+        .setCookie("refreshToken", refreshTokenPlain, fastify.cookieOptions)
+        .setCookie("deviceId", deviceId, fastify.cookieOptions);
+
+      return { accessToken, lab };
     }
 
-    const staff = await staffsCollection().findOne({ labKey: String(labKey).trim(), phone });
+    // ── Normal staff login ──────────────────────────────────────────────────
+    const staff = await staffsCollection().findOne({ labKey: baseLabKey, phone });
     // NOTE: staffRoutes.js now hard-deletes staff (previously soft-deleted via
     // a `deletion.status` flag). A deleted staff member simply won't be found
     // by this findOne anymore, so `!staff` already covers that case — the old
@@ -107,23 +232,7 @@ async function authRoutes(fastify) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
-    const lab = await fastify.mongo.db.collection("labs").findOne(
-      { _id: toObjectId(staff.labId) },
-      {
-        projection: {
-          name: 1,
-          labKey: 1,
-          registrationNumber: 1,
-          type: 1,
-          isActive: 1,
-          "contact.primary": 1,
-          "contact.address": 1,
-          "contact.publicEmail": 1,
-          "billing.feePerInvoice": 1,
-          "billing.forceInvoiceFee": 1,
-        },
-      },
-    );
+    const lab = await labsCollection().findOne({ _id: toObjectId(staff.labId) }, { projection: LAB_PROJECTION });
 
     const grantedPermissions = Object.fromEntries(
       Object.entries(staff.permissions || {}).filter(([, value]) => value === true),
@@ -138,7 +247,7 @@ async function authRoutes(fastify) {
       // Falls back to [] for any staff doc from before that field existed
       // (i.e. hasn't had its permissions touched since) rather than throwing.
       modules: staff.modules ?? [],
-      labKey: String(staff.labKey),
+      labKey: baseLabKey,
       labId: staff.labId.toString(),
       type: lab?.type,
       maxLabAdjustment: staff.maxLabAdjustment ?? 0,
@@ -164,28 +273,12 @@ async function authRoutes(fastify) {
       await tokensCollection().deleteOne({ _id: sessions[0]._id });
     }
 
-    const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
-    const userAgent = req.headers["user-agent"] || "unknown";
-
-    const deviceInfo = {
-      browser: device?.browser ?? "Unknown",
-      browserVersion: device?.browserVersion ?? "",
-      os: device?.os ?? "Unknown",
-      osVersion: device?.osVersion ?? "",
-      deviceType: device?.deviceType ?? "unknown",
-      screenRes: device?.screenRes ?? "",
-      timezone: device?.timezone ?? "",
-      language: device?.language ?? "",
-      ip,
-      userAgent,
-    };
-
     await tokensCollection().insertOne({
       userId: toObjectId(payload.id),
       labId: toObjectId(payload.labId),
       deviceId,
       refreshToken: fastify.hashToken(refreshTokenPlain),
-      device: deviceInfo,
+      device: buildDeviceInfo(req, device),
       createdAt: new Date(),
       lastUsedAt: new Date(),
       expiresAt: new Date(Date.now() + fastify.REFRESH_EXPIRY_MS),
@@ -336,6 +429,9 @@ async function authRoutes(fastify) {
       // Snapshotted at login/refresh time — see /refresh for the staleness
       // tradeoff, and the billing-update route for how this gets invalidated.
       billing: decoded.billing ?? { feePerInvoice: 0, forceInvoiceFee: false },
+      // Support-admin sessions carry this through so downstream checks can
+      // tell them apart from a normal staff session after a refresh.
+      ...(decoded.isSupportAdmin && { isSupportAdmin: true }),
     };
 
     const existingSession = await tokensCollection().findOne({

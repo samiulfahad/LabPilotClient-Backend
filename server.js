@@ -86,10 +86,11 @@ await fastify.register(cors, {
     "https://lpadmin.netlify.app",
     "http://localhost:5173",
     "http://localhost:5174",
-    "http://10.155.23.187:5173"
+    "http://10.155.23.187:5173",
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["X-Billing-Due", "X-Billing-Overdue", "X-Billing-Due-Date"],
   credentials: true,
 });
 
@@ -158,7 +159,6 @@ fastify.register(testRoutes, { prefix: API });
 fastify.register(productRoutes, { prefix: API });
 fastify.register(invoiceRoutes, { prefix: API });
 fastify.register(myActivityRoutes, { prefix: API });
-
 
 // Outdoor Reports
 fastify.register(outdoorReportRoutes, { prefix: API });
