@@ -9,7 +9,7 @@
 //   if (blocked) return reply.code(402).send({ error: "Account overdue. Please pay your outstanding bill." });
 //
 //   const status = await fastify.getBillingStatus(labIdObjectId);
-//   // { hasUnpaid: boolean, blocked: boolean, amount: number|null, dueDate: number|null }
+//   // { hasUnpaid, blocked, id, amount, dueDate, invoiceCount, breakdown, billingPeriodStart, billingPeriodEnd }
 
 import fp from "fastify-plugin";
 import toObjectId from "../utils/db.js";
@@ -24,15 +24,41 @@ async function billingGuardPlugin(fastify) {
     // A lab has an unpaid bill if any "unpaid" billing doc exists.
     // It's "blocked" (hard-gated) only once that bill's dueDate has passed.
     // We only need the most recent unpaid bill — if it's not overdue, none are.
+    //
+    // Projection widened to cover everything the /billing/status route (and
+    // the frontend CurrentBillCard) needs — previously only dueDate/totalAmount
+    // were fetched here, so invoiceCount, breakdown, the bill id, and the
+    // billing period always came back undefined on this path even though
+    // /billing/history projected them correctly.
     const unpaidBill = await fastify.mongo.db
       .collection("billings")
       .findOne(
         { labId, status: "unpaid" },
-        { projection: { dueDate: 1, totalAmount: 1 }, sort: { billingPeriodStart: -1 } },
+        {
+          projection: {
+            dueDate: 1,
+            totalAmount: 1,
+            invoiceCount: 1,
+            breakdown: 1,
+            billingPeriodStart: 1,
+            billingPeriodEnd: 1,
+          },
+          sort: { billingPeriodStart: -1 },
+        },
       );
 
     if (!unpaidBill) {
-      return { hasUnpaid: false, blocked: false, amount: 0, dueDate: null };
+      return {
+        hasUnpaid: false,
+        blocked: false,
+        id: null,
+        amount: 0,
+        dueDate: null,
+        invoiceCount: 0,
+        breakdown: null,
+        billingPeriodStart: null,
+        billingPeriodEnd: null,
+      };
     }
 
     const blocked = unpaidBill.dueDate != null && Date.now() > unpaidBill.dueDate; // pure UTC comparison — timezone-safe
@@ -40,17 +66,33 @@ async function billingGuardPlugin(fastify) {
     return {
       hasUnpaid: true,
       blocked,
+      id: unpaidBill._id,
       amount: unpaidBill.totalAmount ?? null,
       dueDate: unpaidBill.dueDate ?? null,
+      invoiceCount: unpaidBill.invoiceCount ?? 0,
+      breakdown: unpaidBill.breakdown ?? null,
+      billingPeriodStart: unpaidBill.billingPeriodStart ?? null,
+      billingPeriodEnd: unpaidBill.billingPeriodEnd ?? null,
     };
   }
 
   /**
-   * Returns the full billing status for a lab (unpaid flag, blocked flag, amount, dueDate).
+   * Returns the full billing status for a lab (unpaid flag, blocked flag,
+   * bill id, amount, dueDate, invoiceCount, breakdown, billing period).
    * Uses in-memory cache with 5-minute TTL.
    *
    * @param {import('mongodb').ObjectId} labIdObj
-   * @returns {Promise<{hasUnpaid: boolean, blocked: boolean, amount: number|null, dueDate: number|null}>}
+   * @returns {Promise<{
+   *   hasUnpaid: boolean,
+   *   blocked: boolean,
+   *   id: import('mongodb').ObjectId|null,
+   *   amount: number|null,
+   *   dueDate: number|null,
+   *   invoiceCount: number,
+   *   breakdown: object|null,
+   *   billingPeriodStart: number|null,
+   *   billingPeriodEnd: number|null,
+   * }>}
    */
   fastify.decorate("getBillingStatus", async (labIdObj) => {
     const key = labIdObj.toString();
