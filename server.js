@@ -17,6 +17,9 @@ import { ensureIndexes } from "./db/indexes.js";
 // Auth Routes
 import authRoutes from "./routes/auth/auth.js";
 
+// Set Password
+import setPasswordRoutes from "./routes/setPassword/setPassword.js";
+
 // Setup Routes
 import referrerRoutes from "./routes/setup/referrer.js";
 import staffRoutes from "./routes/setup/staff.js";
@@ -138,6 +141,9 @@ const API = "/v1";
 
 // Auth
 fastify.register(authRoutes, { prefix: API });
+
+// Set Password for new Users
+fastify.register(setPasswordRoutes, { prefix: API });
 
 // Daily Reports
 fastify.register(cashmemoRoutes, { prefix: API });

@@ -89,6 +89,8 @@ export const ALLOWED_DESIG_VALUES = new Set(ALLOWED_DESIGNATIONS.map((d) => d.va
 export const ALLOWED_PERM_KEYS = new Set(ALLOWED_PERMISSIONS.map((p) => p.key));
 
 async function staticDataRoutes(fastify) {
+
+  
   // ── GET /departments ──────────────────────────────────────────────────────
   fastify.get(
     "/departments",

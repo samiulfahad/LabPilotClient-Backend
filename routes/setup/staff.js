@@ -20,6 +20,15 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * actually removed from the collection. Run a one-time cleanup before
  * deploying this change:
  *   db.staffs.deleteMany({ "deletion.status": true })
+ *
+ * MIGRATION NOTE — random temp password → password-set link (this change):
+ * New staff no longer get a random password texted to them in plaintext.
+ * Registration now leaves `password: null` and issues the same one-time,
+ * hashed-token link used by the admin-creation flow in labRoutes.js. A new
+ * resend endpoint lets an admin re-send that link — but only while the
+ * staff member still hasn't set a password (`password: null`); once set,
+ * resend is refused rather than silently minting a link that could hijack
+ * a live account.
  */
 
 // ─── Reusable Schema Fragments ────────────────────────────────────────────────
@@ -81,7 +90,7 @@ const getAllStaffSchema = {
 const createStaffSchema = {
   schema: {
     tags: ["Staff"],
-    summary: "Add a new staff member to the lab",
+    summary: "Add a new staff member to the lab — sends a password-set link via SMS",
     body: {
       type: "object",
       required: ["name", "phone", "permissions"],
@@ -153,6 +162,14 @@ const deleteStaffSchema = {
   },
 };
 
+const resendPasswordSetupSchema = {
+  schema: {
+    tags: ["Staff"],
+    summary: "Resend the password-set SMS link — only while no password has been set yet",
+    params: staffIdParamSchema,
+  },
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Derived from ALLOWED_PERMISSIONS so it never drifts out of sync
@@ -176,19 +193,14 @@ const computeModules = (normalizedPerms) => {
   return modules;
 };
 
-// Cryptographically-random one-time password for new staff, sent via SMS and
-// meant to be changed on first login. Previously this reused
-// generateInvoiceId() — a business-ID generator, not a credential generator —
-// which is very likely lower-entropy and more predictable than a password
-// needs to be. base64url gives 64 symbols/char (~6 bits/char); 12 chars is
-// ~72 bits of entropy, comfortably strong for a short-lived temp credential.
-const generateTempPassword = (length = 12) => crypto.randomBytes(length).toString("base64url").slice(0, length);
+const hashToken = (raw) => crypto.createHash("sha256").update(raw).digest("hex");
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function staffRoutes(fastify) {
   const collection = fastify.mongo.db.collection(collectionName);
   const labsCollection = fastify.mongo.db.collection("labs");
+  const passwordSetTokens = () => fastify.mongo.db.collection("passwordSetTokens");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -225,6 +237,41 @@ async function staffRoutes(fastify) {
     return _id;
   };
 
+  // Issues a fresh one-time password-set token for a staff member and texts
+  // the link. Wipes any still-live token for that staff first, so an older
+  // SMS (from initial creation or a previous resend) can't be used alongside
+  // a newer one. Shared by POST /staff/add and POST /staff/:id/resend-password.
+  // Returns whether the SMS actually went out — the token/DB side is already
+  // committed either way, so a failed send here is a "resend it" situation,
+  // not a lost account.
+  const issuePasswordSetLink = async (fastify, { staffId, lid, labKey, name, phone }) => {
+    await passwordSetTokens().deleteMany({ staffId });
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const now = new Date();
+
+    await passwordSetTokens().insertOne({
+      staffId,
+      labId: lid,
+      tokenHash: hashToken(rawToken),
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000), // 24h
+    });
+
+    const setPasswordUrl = `${process.env.CLIENT_URL}/set-password?token=${rawToken}&labKey=${labKey}`;
+
+    try {
+      await fastify.sendSMS({
+        number: phone,
+        message: `LabPilotPro.com-এ আপনাকে স্বাগতম, ${name}। আপনার পাসওয়ার্ড সেট করুন: ${setPasswordUrl} (২৪ ঘণ্টার মধ্যে মেয়াদ শেষ হবে)`,
+      });
+      return true;
+    } catch (err) {
+      fastify.log.error({ err, staffId }, "Failed to send staff password-set SMS");
+      return false;
+    }
+  };
+
   // ── GET /staffs ───────────────────────────────────────────────────────────
   fastify.get("/staffs", getAllStaffSchema, async (req, reply) => {
     try {
@@ -243,6 +290,7 @@ async function staffRoutes(fastify) {
                 isActive: 1,
                 role: 1,
                 maxLabAdjustment: 1,
+                password: 1,
               },
             },
           )
@@ -251,7 +299,11 @@ async function staffRoutes(fastify) {
         labsCollection.findOne({ _id: lid }, { projection: { "limit.maxStaff": 1 } }),
       ]);
 
-      return { staffs, maxStaff: typeof lab?.limit?.maxStaff === "number" ? lab.limit.maxStaff : null };
+      // hasPasswordSet lets the frontend show/hide the "resend link" action
+      // without exposing the hash itself.
+      const withFlags = staffs.map(({ password, ...s }) => ({ ...s, hasPasswordSet: Boolean(password) }));
+
+      return { staffs: withFlags, maxStaff: typeof lab?.limit?.maxStaff === "number" ? lab.limit.maxStaff : null };
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch staff" });
@@ -303,17 +355,17 @@ async function staffRoutes(fastify) {
         return reply.code(409).send({ error: "Phone number already exists in this lab" });
       }
 
-      const password = generateTempPassword();
-      const hashedPassword = await bcrypt.hash(password, 10);
       const normalizedPermissions = normalizePermissions(permissions);
+      const name_ = name.trim();
+      const labKeyStr = String(req.user.labKey);
 
       const result = await collection.insertOne({
         labId: lid,
-        labKey: String(req.user.labKey),
-        name: name.trim(),
+        labKey: labKeyStr,
+        name: name_,
         ...(email && { email }),
         phone,
-        password: hashedPassword,
+        password: null, // set once the SMS link is used
         role: "staff",
         permissions: normalizedPermissions,
         modules: computeModules(normalizedPermissions),
@@ -322,14 +374,52 @@ async function staffRoutes(fastify) {
         created: { at: Date.now(), by: { id: toObjectId(req.user.id), name: req.user.name } },
       });
 
-      const message = `LabPilotPro.com-এ আপনাকে স্বাগতম। আপনার পাসওয়ার্ড ${password} এবং ল্যাব আইডি ${req.user.labKey} , লগইন করার পর পাসওয়ার্ডটি পরিবর্তন করুন`;
+      const smsSent = await issuePasswordSetLink(fastify, {
+        staffId: result.insertedId,
+        lid,
+        labKey: labKeyStr,
+        name: name_,
+        phone,
+      });
 
-      fastify.sendSMS({ number: phone, message });
-
-      return reply.code(201).send({ _id: result.insertedId });
+      return reply.code(201).send({ _id: result.insertedId, smsSent });
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to create staff member" });
+    }
+  });
+
+  // ── POST /staff/:id/resend-password-setup ─────────────────────────────────
+  // Only valid while the staff member hasn't set a password yet. Once
+  // password is non-null, this is refused — resending after that point would
+  // let anyone with admin access mint a fresh link to hijack an already-live
+  // account rather than just help someone who never got/used the first SMS.
+  fastify.post("/staff/:id/resend-password-setup", resendPasswordSetupSchema, async (req, reply) => {
+    try {
+      const lid = labId(req);
+      const _id = toObjectId(req.params.id);
+      if (!_id) return reply.code(400).send({ error: "Invalid staff ID" });
+
+      const staff = await collection.findOne(
+        { _id, labId: lid },
+        { projection: { role: 1, password: 1, phone: 1, name: 1, labKey: 1 } },
+      );
+      if (!staff) return reply.code(404).send({ error: "Staff not found" });
+      if (staff.role === "admin") return reply.code(403).send({ error: "Admin accounts cannot be edited" });
+      if (staff.password) return reply.code(409).send({ error: "This staff member has already set their password" });
+
+      const smsSent = await issuePasswordSetLink(fastify, {
+        staffId: _id,
+        lid,
+        labKey: staff.labKey,
+        name: staff.name,
+        phone: staff.phone,
+      });
+
+      return { message: smsSent ? "Password-set link resent" : "Link created but SMS failed to send", smsSent };
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to resend password-set link" });
     }
   });
 
@@ -459,6 +549,7 @@ async function staffRoutes(fastify) {
       if (result.deletedCount === 0) return reply.code(404).send({ error: "Staff not found" });
 
       await fastify.mongo.db.collection("tokens").deleteMany({ userId: _id });
+      await passwordSetTokens().deleteMany({ staffId: _id });
 
       return { message: "Staff deleted successfully" };
     } catch (err) {
