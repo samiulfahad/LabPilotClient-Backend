@@ -27,6 +27,12 @@ const toBillingClaim = (lab) => ({
   forceInvoiceFee: !!lab?.billing?.forceInvoiceFee,
 });
 
+// Shape used for the `medicalReport` claim embedded in the JWT — same
+// one-place-only rationale as toBillingClaim above.
+const toMedicalReportClaim = (lab) => ({
+  padHeight: lab?.medicalReport?.padHeight ?? 0,
+});
+
 const LAB_PROJECTION = {
   name: 1,
   labKey: 1,
@@ -38,6 +44,7 @@ const LAB_PROJECTION = {
   "contact.publicEmail": 1,
   "billing.feePerInvoice": 1,
   "billing.forceInvoiceFee": 1,
+  "medicalReport.padHeight": 1,
 };
 
 const deviceSchemaProps = {
@@ -179,6 +186,7 @@ async function authRoutes(fastify) {
         type: lab.type,
         maxLabAdjustment: 0,
         billing: toBillingClaim(lab),
+        medicalReport: toMedicalReportClaim(lab),
         isSupportAdmin: true,
       };
 
@@ -254,6 +262,8 @@ async function authRoutes(fastify) {
       // Snapshotted at login/refresh time — see /refresh for the staleness
       // tradeoff, and the billing-update route for how this gets invalidated.
       billing: toBillingClaim(lab),
+      // Same snapshot-at-login/refresh tradeoff as `billing` above.
+      medicalReport: toMedicalReportClaim(lab),
     };
 
     const deviceId = randomUUID();
@@ -429,6 +439,8 @@ async function authRoutes(fastify) {
       // Snapshotted at login/refresh time — see /refresh for the staleness
       // tradeoff, and the billing-update route for how this gets invalidated.
       billing: decoded.billing ?? { feePerInvoice: 0, forceInvoiceFee: false },
+      // Same snapshot-at-login/refresh tradeoff as `billing` above.
+      medicalReport: decoded.medicalReport ?? { padHeight: 0 },
       // Support-admin sessions carry this through so downstream checks can
       // tell them apart from a normal staff session after a refresh.
       ...(decoded.isSupportAdmin && { isSupportAdmin: true }),
