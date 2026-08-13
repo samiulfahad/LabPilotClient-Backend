@@ -21,6 +21,13 @@
  *    all roles that can search/add-items also hold "patientList". Flagging this
  *    explicitly rather than guessing — revisit once the full permission matrix
  *    is available.
+ *  - Retention: released patients are auto-purged 365 days after discharge via
+ *    a MongoDB TTL index on `purgeAt` (a real BSON Date, unlike the rest of
+ *    this schema's numeric timestamps — TTL indexes only fire on Date fields).
+ *    `purgeAt` is set once, at release time. Admitted patients never get this
+ *    field, so they're never touched by the TTL sweep. This is a PERMANENT,
+ *    UNRECOVERABLE hard delete — see backfill script for pre-existing released
+ *    patients, which won't have `purgeAt` until it's run once.
  */
 
 import { randomUUID } from "crypto";
@@ -31,6 +38,9 @@ const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
 // Mirrors invoiceRoutes.js PAYMENT_MODES
 const PAYMENT_MODES = ["cash", "bkash", "nagad", "card", "bank_transfer", "others"];
+
+// Retention window for released patients — see TTL index in onReady() below.
+const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 // ─── Schema Fragments ─────────────────────────────────────────────────────────
 
@@ -478,6 +488,19 @@ async function indoorPatientRoutes(fastify) {
   const requireEdit = { onRequest: [fastify.authorize("editPatient")] };
   const requireList = { onRequest: [fastify.authorize("patientList")] };
 
+  // Ensures the TTL index exists on boot. Safe to run every startup — createIndex
+  // is idempotent. purgeAt is a real BSON Date (set only at release time, see the
+  // /release handler below); expireAfterSeconds: 0 means "expire exactly at the
+  // stored date" rather than N seconds after it. Admitted patients never get a
+  // purgeAt field, so the TTL monitor never considers them.
+  fastify.addHook("onReady", async () => {
+    try {
+      await col().createIndex({ purgeAt: 1 }, { expireAfterSeconds: 0, name: "purgeAt_ttl" });
+    } catch (err) {
+      fastify.log.error(err, "Failed to ensure indoorPatients purgeAt TTL index");
+    }
+  });
+
   // ── GET /indoor-patients/required-data ──────────────────────────────────────
   fastify.get("/indoor-patients/required-data", getRequiredDataSchema, async (req, reply) => {
     try {
@@ -640,6 +663,10 @@ async function indoorPatientRoutes(fastify) {
         admittedBy: by(req),
         releasedAt: null,
         releasedBy: null,
+        // Set only at release time (see /release handler). A real BSON Date so
+        // the purgeAt_ttl index can act on it — everything else in this schema
+        // is a numeric epoch timestamp, purgeAt is the deliberate exception.
+        purgeAt: null,
         created: { at: admittedAt, by: by(req) },
         deletion: { at: null, by: null, note: null },
       };
@@ -1151,6 +1178,10 @@ async function indoorPatientRoutes(fastify) {
             status: "released",
             releasedAt: releaseTime,
             releasedBy: by(req),
+            // Real BSON Date (unlike the rest of this schema's numeric timestamps) —
+            // required for the purgeAt_ttl index to fire. Patient is hard-deleted
+            // by MongoDB ~365 days from now, permanently and unrecoverably.
+            purgeAt: new Date(releaseTime + ONE_YEAR_MS),
             updated: { at: releaseTime, by: by(req) },
           },
           $push: {
