@@ -40,6 +40,12 @@ const paginatedResponse = (result, limit, cursorField) => {
 const EXPENSE_TYPES = ["staffSalary", "medicine", "testKit", "products", "commission", "others"];
 const OBJECT_ID_PATTERN = "^[a-fA-F0-9]{24}$";
 
+// 6 months, in ms — used to set the TTL expireAt on soft-deleted expenses.
+// Mongo's TTL index (see ensureExpenseIndexes below) hard-deletes the doc
+// once deletion.expireAt is in the past. This is a fixed 180-day approximation,
+// not calendar-accurate.
+const SIX_MONTHS_MS = 1000 * 60 * 60 * 24 * 30 * 6;
+
 const expenseIdParamSchema = {
   type: "object",
   required: ["expenseId"],
@@ -112,6 +118,19 @@ async function expenseRoutes(fastify) {
   const labId = (req) => toObjectId(req.user.labId);
   const userId = (req) => toObjectId(req.user.id);
 
+  // ── TTL index setup ─────────────────────────────────────────────────────
+  // Runs once at boot; createIndex is a no-op if the index already exists
+  // with the same spec. Hard-deletes soft-deleted expenses ~6 months after
+  // deletion.expireAt. Partial index keeps it scoped to deleted docs only.
+  fastify.ready().then(() => {
+    col()
+      .createIndex(
+        { "deletion.expireAt": 1 },
+        { expireAfterSeconds: 0, partialFilterExpression: { "deletion.status": true } },
+      )
+      .catch((err) => fastify.log.error({ err }, "Failed to ensure expense TTL index"));
+  });
+
   fastify.addHook("onRequest", fastify.authenticate);
 
   const requireCreate = { onRequest: [fastify.authorize("addExpense")] };
@@ -150,6 +169,7 @@ async function expenseRoutes(fastify) {
           status: false,
           at: null,
           by: { id: null, name: null },
+          expireAt: null,
         },
       };
 
@@ -203,6 +223,8 @@ async function expenseRoutes(fastify) {
 
   // ── PATCH /expense/:expenseId/delete ──────────────────────────────────────
   // Soft delete, consistent with invoices — keeps a recoverable audit trail.
+  // Also stamps deletion.expireAt (a real Date, unlike the epoch-ms fields
+  // elsewhere in this doc) so the TTL index hard-deletes it ~6 months later.
   fastify.patch("/expense/:expenseId/delete", { ...expenseIdSchema, ...requireDelete }, async (req, reply) => {
     try {
       const { expenseId } = req.params;
@@ -222,6 +244,7 @@ async function expenseRoutes(fastify) {
               status: true,
               at: Date.now(),
               by: { id: userId(req), name: req.user.name },
+              expireAt: new Date(Date.now() + SIX_MONTHS_MS),
             },
           },
         },
