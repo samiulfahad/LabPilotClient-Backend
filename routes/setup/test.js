@@ -61,7 +61,7 @@ const getCategoriesSchema = {
 const getCatalogSchema = {
   schema: {
     tags: ["Tests"],
-    summary: "Get all tests from the global test catalog",
+    summary: "Get all tests from the global test catalog, annotated with online status and default schema",
   },
 };
 
@@ -117,7 +117,8 @@ const createTestSchema = {
         schemaId: {
           ...objectIdSchema,
           nullable: true,
-          description: "ObjectId of the report schema (optional)",
+          description:
+            "ObjectId of the report schema (optional). If omitted and the catalog test has a defaultSchemaId, that is used automatically.",
         },
         price: {
           ...moneyFieldSchema,
@@ -203,6 +204,7 @@ const deleteTestSchema = {
 
 async function testRoutes(fastify) {
   const col = () => fastify.mongo.db.collection("tests");
+  const catalogCol = () => fastify.mongo.db.collection("testCatalog");
   const labId = (req) => toObjectId(req.user.labId);
 
   fastify.addHook("onRequest", fastify.authenticate);
@@ -238,10 +240,19 @@ async function testRoutes(fastify) {
   });
 
   // ── GET /test/catalog ─────────────────────────────────────────────────────
+  // Annotates each catalog test with isOnline + schemaId derived from
+  // testCatalog.defaultSchemaId (set via schemaRoutes.js set-default route),
+  // so the "add test" UI can show which catalog tests are online and
+  // pre-fill/display their default schema before a lab attaches one.
   fastify.get("/test/catalog", getCatalogSchema, async (req, reply) => {
     try {
-      const list = await fastify.mongo.db.collection("testCatalog").find({}).toArray();
-      return reply.send(list);
+      const list = await catalogCol().find({}).toArray();
+      const annotated = list.map((doc) => ({
+        ...doc,
+        isOnline: !!doc.defaultSchemaId,
+        schemaId: doc.defaultSchemaId ?? null,
+      }));
+      return reply.send(annotated);
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch test catalog" });
@@ -293,12 +304,18 @@ async function testRoutes(fastify) {
   });
 
   // ── POST /test ────────────────────────────────────────────────────────────
+  // If schemaId is omitted, falls back to the catalog test's defaultSchemaId
+  // (whatever set-default currently points to) — so online tests get wired
+  // to a schema automatically on add, without the caller having to know it.
   fastify.post("/test", { ...createTestSchema }, async (req, reply) => {
     try {
       const { name, testId, categoryId, schemaId, price, commission } = req.body;
 
       const catalogTestId = toObjectId(testId);
       if (!catalogTestId) return reply.code(400).send({ error: "Invalid catalog test ID" });
+
+      const catalogTest = await catalogCol().findOne({ _id: catalogTestId });
+      if (!catalogTest) return reply.code(422).send({ error: "Catalog test does not exist" });
 
       const finalPrice = price ?? 0;
       const finalCommission = commission ?? 0;
@@ -309,12 +326,14 @@ async function testRoutes(fastify) {
       const existing = await col().findOne({ labId: labId(req), testId: catalogTestId });
       if (existing) return reply.code(409).send({ error: "Test already registered" });
 
+      const finalSchemaId = schemaId ? toObjectId(schemaId) : (catalogTest.defaultSchemaId ?? null);
+
       const doc = {
         labId: labId(req),
         name: name.trim(),
         testId: catalogTestId, // ← ObjectId reference to catalog test, consistent with categoryId/schemaId
         categoryId: categoryId ? toObjectId(categoryId) : null,
-        schemaId: schemaId ? toObjectId(schemaId) : null,
+        schemaId: finalSchemaId, // ← explicit body value wins; else falls back to catalog's defaultSchemaId
         price: finalPrice,
         commission: finalCommission,
         createdAt: Date.now(),
