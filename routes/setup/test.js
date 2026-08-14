@@ -297,19 +297,22 @@ async function testRoutes(fastify) {
     try {
       const { name, testId, categoryId, schemaId, price, commission } = req.body;
 
+      const catalogTestId = toObjectId(testId);
+      if (!catalogTestId) return reply.code(400).send({ error: "Invalid catalog test ID" });
+
       const finalPrice = price ?? 0;
       const finalCommission = commission ?? 0;
       if (finalCommission > finalPrice) {
         return reply.code(400).send({ error: "Commission cannot exceed price" });
       }
 
-      const existing = await col().findOne({ labId: labId(req), testId });
+      const existing = await col().findOne({ labId: labId(req), testId: catalogTestId });
       if (existing) return reply.code(409).send({ error: "Test already registered" });
 
       const doc = {
         labId: labId(req),
         name: name.trim(),
-        testId, // ← plain string reference to catalog _id
+        testId: catalogTestId, // ← ObjectId reference to catalog test, consistent with categoryId/schemaId
         categoryId: categoryId ? toObjectId(categoryId) : null,
         schemaId: schemaId ? toObjectId(schemaId) : null,
         price: finalPrice,
