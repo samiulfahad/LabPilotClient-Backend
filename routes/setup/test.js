@@ -250,7 +250,6 @@ async function testRoutes(fastify) {
       const annotated = list.map((doc) => ({
         ...doc,
         isOnline: !!doc.defaultSchemaId,
-        schemaId: doc.defaultSchemaId ?? null,
       }));
       return reply.send(annotated);
     } catch (err) {
