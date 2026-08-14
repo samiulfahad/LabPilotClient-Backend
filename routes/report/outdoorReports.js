@@ -31,23 +31,6 @@ const mergeReportDates = (existingReport, incomingReport) => ({
   }),
 });
 
-// Defaults applied at READ time only — never written to the DB unless the
-// user explicitly sets a date via PUT /report/dates.
-//   Sample Collection Date → falls back to the invoice's own createdAt
-//     (the date the sample was actually brought in / invoice was raised).
-//   Report Date            → falls back to the test's completedAt
-//     (the moment the report was actually uploaded).
-// A test with no report.sampleCollectionDate/reportDate stored, and no
-// completedAt yet (report not uploaded), correctly stays null.
-const withDateDefaults = (test, invoiceCreatedAt) => ({
-  ...test,
-  report: {
-    ...(test.report ?? {}),
-    sampleCollectionDate: test.report?.sampleCollectionDate ?? invoiceCreatedAt ?? null,
-    reportDate: test.report?.reportDate ?? test.completedAt ?? null,
-  },
-});
-
 // ─── Route Schemas ────────────────────────────────────────────────────────────
 
 const getSchemaParamSchema = {
@@ -179,11 +162,6 @@ async function outdoorReportRoutes(fastify) {
         },
       );
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
-
-      // Apply Sample Collection Date / Report Date read-time defaults
-      // (see withDateDefaults) across every test on this invoice.
-      invoice.tests = (invoice.tests ?? []).map((t) => withDateDefaults(t, invoice.createdAt));
-
       return reply.send(invoice);
     } catch (err) {
       req.log.error(err);
@@ -336,10 +314,8 @@ async function outdoorReportRoutes(fastify) {
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const rawTest = invoice.tests.find((t) => t.testId.toString() === testId.toString());
-      if (!rawTest) return reply.code(404).send({ error: "Test not found in this invoice" });
-
-      const test = withDateDefaults(rawTest, invoice.createdAt);
+      const test = invoice.tests.find((t) => t.testId.toString() === testId.toString());
+      if (!test) return reply.code(404).send({ error: "Test not found in this invoice" });
 
       return reply.send({
         report: test.report,

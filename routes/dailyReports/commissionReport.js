@@ -86,6 +86,45 @@ async function commissionReportRoutes(fastify) {
                 invoices: { $slice: ["$invoices", 100] },
               },
             },
+            // ── Commission is only payable to registered referrers ──────────
+            // "self" / walk-in / any referrer without a real referrerId still
+            // shows up here (for revenue/volume tracking), but every
+            // commission-bearing figure — the referrer-level total, each
+            // invoice's commission, and each test line's commission rate —
+            // is zeroed out. The test-level `commission` field on the raw
+            // invoice document is a pricing input, not proof a commission is
+            // actually owed; ownership requires a registered referrer.
+            {
+              $addFields: {
+                totalCommission: { $cond: ["$isRegistered", "$totalCommission", 0] },
+                invoices: {
+                  $map: {
+                    input: "$invoices",
+                    as: "inv",
+                    in: {
+                      $mergeObjects: [
+                        "$$inv",
+                        {
+                          commission: { $cond: ["$isRegistered", "$$inv.commission", 0] },
+                          tests: {
+                            $map: {
+                              input: "$$inv.tests",
+                              as: "t",
+                              in: {
+                                $mergeObjects: [
+                                  "$$t",
+                                  { commission: { $cond: ["$isRegistered", "$$t.commission", 0] } },
+                                ],
+                              },
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
             { $sort: { totalCommission: -1, totalInvoices: -1 } },
           ],
           { allowDiskUse: true },
@@ -143,6 +182,14 @@ async function commissionReportRoutes(fastify) {
                     lastSeenAt: { $max: "$expenses.addedAt" },
                   },
                 },
+                // Same rule as outdoor: no referrerId → no commission owed,
+                // even though the rate itself (still shown) came from a real
+                // test-line commission field.
+                {
+                  $addFields: {
+                    commissionTotal: { $cond: [{ $gt: ["$refId", null] }, "$commissionTotal", 0] },
+                  },
+                },
               ],
               { allowDiskUse: true },
             )
@@ -189,6 +236,8 @@ async function commissionReportRoutes(fastify) {
         totalInvoices = 0;
 
       for (const row of outdoorRows) {
+        // totalCommission is already zeroed by the pipeline for unregistered
+        // referrers, so this sum only ever picks up commission actually owed.
         totalCommission += row.totalCommission;
         totalDiscount += row.totalDiscount;
         totalFinal += row.totalFinal;

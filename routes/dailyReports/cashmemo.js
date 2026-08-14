@@ -230,7 +230,10 @@ async function cashmemoRoutes(fastify) {
   //
   // referrerCommission (%-based) and referrerCommissionTestWise (sum of each
   // test's own commission amount) are both summed here so the client can
-  // toggle between the two views without a second request.
+  // toggle between the two views without a second request. Neither is summed
+  // for an invoice with an unregistered referrer (referrer.id null — "self"/
+  // walk-in) even if amount.referrerCommission(TestWise) has a stored value:
+  // there's no one to pay, so it must not count toward payable commission.
   //
   // totalInvoiceFee sums amount.invoiceFee across active invoices created in
   // range — the online-report fee (added on top of the patient's total, per
@@ -277,8 +280,21 @@ async function cashmemoRoutes(fastify) {
                   initial: { $sum: { $ifNull: ["$amount.initial", 0] } },
                   labAdjustment: { $sum: { $ifNull: ["$amount.labAdjustment", 0] } },
                   referrerDiscount: { $sum: { $ifNull: ["$amount.referrerDiscount", 0] } },
-                  referrerCommission: { $sum: { $ifNull: ["$amount.referrerCommission", 0] } },
-                  referrerCommissionTestWise: { $sum: { $ifNull: ["$amount.referrerCommissionTestWise", 0] } },
+                  // No commission (test-wise or %) for unregistered referrers.
+                  referrerCommission: {
+                    $sum: {
+                      $cond: [{ $ne: ["$referrer.id", null] }, { $ifNull: ["$amount.referrerCommission", 0] }, 0],
+                    },
+                  },
+                  referrerCommissionTestWise: {
+                    $sum: {
+                      $cond: [
+                        { $ne: ["$referrer.id", null] },
+                        { $ifNull: ["$amount.referrerCommissionTestWise", 0] },
+                        0,
+                      ],
+                    },
+                  },
                   totalFinal: { $sum: { $ifNull: ["$amount.final", 0] } },
                   totalNet: { $sum: { $ifNull: ["$amount.net", 0] } },
                   totalPaid: { $sum: { $ifNull: ["$amount.paid", 0] } },

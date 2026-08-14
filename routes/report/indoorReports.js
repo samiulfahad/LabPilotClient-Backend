@@ -200,7 +200,19 @@ async function indoorReportRoutes(fastify) {
         return reply.code(400).send({ error: "This test is offline and does not support report upload" });
       }
 
-      const reportWithDates = mergeReportDates(reportEntry.report, report);
+      const uploadedAt = Date.now();
+
+      // On first upload, reportDate is hardcoded to the moment of upload —
+      // it's not client-supplied and isn't inherited from any prior value.
+      // sampleCollectionDate is preserved from whatever's already stored
+      // (set at expense-add time, or since overridden via PUT /indoorReport/dates).
+      const reportWithDates = {
+        ...report,
+        ...(reportEntry.report?.sampleCollectionDate !== undefined && {
+          sampleCollectionDate: reportEntry.report.sampleCollectionDate,
+        }),
+        reportDate: uploadedAt,
+      };
 
       const result = await col().updateOne(
         { _id, labId: labId(req) },
@@ -208,7 +220,7 @@ async function indoorReportRoutes(fastify) {
           $set: {
             [`reports.${reportIndex}.report`]: reportWithDates,
             [`reports.${reportIndex}.isCompleted`]: true,
-            [`reports.${reportIndex}.completedAt`]: Date.now(),
+            [`reports.${reportIndex}.completedAt`]: uploadedAt,
             [`reports.${reportIndex}.completedBy`]: by(req),
           },
         },
@@ -267,6 +279,8 @@ async function indoorReportRoutes(fastify) {
   });
 
   // ── PUT /indoorReport/dates ────────────────────────────────────────────
+  // Works regardless of whether the report has been submitted yet — parity
+  // with outdoor's /report/dates.
   fastify.put("/indoorReport/dates", { ...updateDatesSchema, ...requireUpload }, async (req, reply) => {
     try {
       const { patientId, testId, addedAt, sampleCollectionDate, reportDate } = req.body;
