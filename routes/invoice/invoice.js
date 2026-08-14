@@ -360,7 +360,6 @@ const getInvoiceSchema = {
   },
 };
 
-
 const patientInfoSchema = {
   schema: {
     tags: ["Invoices"],
@@ -551,6 +550,10 @@ async function invoiceRoutes(fastify) {
         return reply.code(500).send({ error: "Failed to generate a unique invoice ID, please try again" });
       }
 
+      // Single timestamp reused for createdAt, expiresAt, and each online
+      // test's default sampleCollectionDate, so they all agree.
+      const createdAt = Date.now();
+
       // Sum of each test's own `commission` field — distinct from
       // amount.referrerCommission (the referring doctor/agent's cut).
       // Derived server-side from the validated tests array, never trusted
@@ -562,8 +565,8 @@ async function invoiceRoutes(fastify) {
         labId: labId(req),
         labKey: String(req.user.labKey),
         invoiceId,
-        createdAt: Date.now(),
-        expiresAt: new Date(Date.now() + 60 * 60 * 24 * 180 * 1000),
+        createdAt,
+        expiresAt: new Date(createdAt + 60 * 60 * 24 * 180 * 1000),
         patient: {
           name: patient.name,
           gender: patient.gender,
@@ -583,7 +586,16 @@ async function invoiceRoutes(fastify) {
           price: t.price,
           schemaId: t.schemaId ? toObjectId(t.schemaId) : null,
           commission: t.commission || 0,
-          ...(t.schemaId && { report: {}, isCompleted: false }),
+          // Online tests (schemaId set) start with an empty report shell:
+          // sampleCollectionDate defaults to the invoice's creation time,
+          // reportDate is unset until the report is actually filed.
+          ...(t.schemaId && {
+            report: {
+              sampleCollectionDate: createdAt,
+              reportDate: null,
+            },
+            isCompleted: false,
+          }),
         })),
         products: products.map((p) => ({
           productId: toObjectId(p.productId),
@@ -616,7 +628,7 @@ async function invoiceRoutes(fastify) {
         },
         collections:
           amount.paid > 0
-            ? [{ by: { id: userId(req), name: req.user.name }, amount: amount.paid, mode: paymentMode, at: Date.now() }]
+            ? [{ by: { id: userId(req), name: req.user.name }, amount: amount.paid, mode: paymentMode, at: createdAt }]
             : [],
         deletion: {
           status: false,
@@ -639,7 +651,7 @@ async function invoiceRoutes(fastify) {
               },
               {
                 $inc: { stock: -p.quantity },
-                $set: { updatedAt: Date.now() },
+                $set: { updatedAt: createdAt },
               },
             ),
           ),

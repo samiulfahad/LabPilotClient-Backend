@@ -915,7 +915,7 @@ async function indoorPatientRoutes(fastify) {
     }
   });
 
-  // ── POST /indoor-patient/:id/expense ────────────────────────────────────────
+// ── POST /indoor-patient/:id/expense ────────────────────────────────────────
   fastify.post("/indoor-patient/:id/expense", { ...addExpenseSchema, ...requireAddExpense }, async (req, reply) => {
     try {
       const _id = toObjectId(req.params.id);
@@ -951,7 +951,12 @@ async function indoorPatientRoutes(fastify) {
               testId: resolvedItemId,
               name: name.trim(),
               schemaId: toObjectId(schemaId),
-              report: {},
+              // Mirrors createInvoice: sampleCollectionDate defaults to the
+              // moment the test is added, reportDate stays null until filed.
+              report: {
+                sampleCollectionDate: addedAt,
+                reportDate: null,
+              },
               isCompleted: false,
               completedAt: null,
               updatedAt: null,
@@ -975,7 +980,6 @@ async function indoorPatientRoutes(fastify) {
       return reply.code(500).send({ error: "Failed to add expense" });
     }
   });
-
   // ── POST /indoor-patient/:id/discount ────────────────────────────────────────
   fastify.post("/indoor-patient/:id/discount", { ...addDiscountSchema, ...requireDiscount }, async (req, reply) => {
     try {

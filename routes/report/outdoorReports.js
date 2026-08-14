@@ -31,6 +31,23 @@ const mergeReportDates = (existingReport, incomingReport) => ({
   }),
 });
 
+// Defaults applied at READ time only — never written to the DB unless the
+// user explicitly sets a date via PUT /report/dates.
+//   Sample Collection Date → falls back to the invoice's own createdAt
+//     (the date the sample was actually brought in / invoice was raised).
+//   Report Date            → falls back to the test's completedAt
+//     (the moment the report was actually uploaded).
+// A test with no report.sampleCollectionDate/reportDate stored, and no
+// completedAt yet (report not uploaded), correctly stays null.
+const withDateDefaults = (test, invoiceCreatedAt) => ({
+  ...test,
+  report: {
+    ...(test.report ?? {}),
+    sampleCollectionDate: test.report?.sampleCollectionDate ?? invoiceCreatedAt ?? null,
+    reportDate: test.report?.reportDate ?? test.completedAt ?? null,
+  },
+});
+
 // ─── Route Schemas ────────────────────────────────────────────────────────────
 
 const getSchemaParamSchema = {
@@ -124,7 +141,7 @@ async function outdoorReportRoutes(fastify) {
   const requireUpload = { onRequest: [fastify.authorize("testReportUpload")] };
 
   // GET Patient
-    fastify.get("/outdoorReport/:invoiceId", async (req, reply) => {
+  fastify.get("/outdoorReport/:invoiceId", async (req, reply) => {
     try {
       const { invoiceId } = req.params;
       const invoice = await fastify.mongo.db.collection("invoices").findOne(
@@ -148,11 +165,25 @@ async function outdoorReportRoutes(fastify) {
             "tests.isCompleted": 1,
             "tests.report.sampleCollectionDate": 1,
             "tests.report.reportDate": 1,
+            // Previously missing — MetaModal on the frontend reads these
+            // four fields to show "Created by" / "Last edited by" in the
+            // details tab. Without them here, Mongo strips the fields from
+            // every response and the UI always shows "তথ্য নেই" (no info)
+            // regardless of whether the report was actually uploaded/edited.
+            "tests.completedAt": 1,
+            "tests.completedBy": 1,
+            "tests.updatedAt": 1,
+            "tests.updatedBy": 1,
             paymentMode: 1,
           },
         },
       );
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
+
+      // Apply Sample Collection Date / Report Date read-time defaults
+      // (see withDateDefaults) across every test on this invoice.
+      invoice.tests = (invoice.tests ?? []).map((t) => withDateDefaults(t, invoice.createdAt));
+
       return reply.send(invoice);
     } catch (err) {
       req.log.error(err);
@@ -190,7 +221,20 @@ async function outdoorReportRoutes(fastify) {
         return reply.code(400).send({ error: "Report already submitted for this test. Use update instead." });
       }
 
-      const reportWithDates = mergeReportDates(invoice.tests[testIndex].report, report);
+      const uploadedAt = Date.now();
+
+      // On first upload, reportDate is hardcoded to the moment of upload —
+      // it's not client-supplied and isn't inherited from any prior value.
+      // sampleCollectionDate is preserved from whatever's already stored
+      // (defaulted to invoice.createdAt at invoice creation, or since
+      // overridden via PUT /report/dates).
+      const reportWithDates = {
+        ...report,
+        ...(invoice.tests[testIndex].report?.sampleCollectionDate !== undefined && {
+          sampleCollectionDate: invoice.tests[testIndex].report.sampleCollectionDate,
+        }),
+        reportDate: uploadedAt,
+      };
 
       const result = await invoicesCollection().updateOne(
         { invoiceId, labId: labId(req) },
@@ -198,7 +242,7 @@ async function outdoorReportRoutes(fastify) {
           $set: {
             [`tests.${testIndex}.report`]: reportWithDates,
             [`tests.${testIndex}.isCompleted`]: true,
-            [`tests.${testIndex}.completedAt`]: Date.now(),
+            [`tests.${testIndex}.completedAt`]: uploadedAt,
             [`tests.${testIndex}.completedBy`]: by(req),
           },
         },
@@ -292,8 +336,10 @@ async function outdoorReportRoutes(fastify) {
       const invoice = await invoicesCollection().findOne({ invoiceId, labId: labId(req) });
       if (!invoice) return reply.code(404).send({ error: "Invoice not found" });
 
-      const test = invoice.tests.find((t) => t.testId.toString() === testId.toString());
-      if (!test) return reply.code(404).send({ error: "Test not found in this invoice" });
+      const rawTest = invoice.tests.find((t) => t.testId.toString() === testId.toString());
+      if (!rawTest) return reply.code(404).send({ error: "Test not found in this invoice" });
+
+      const test = withDateDefaults(rawTest, invoice.createdAt);
 
       return reply.send({
         report: test.report,
