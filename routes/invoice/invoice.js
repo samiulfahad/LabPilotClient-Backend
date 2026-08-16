@@ -21,8 +21,21 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *
  *   referrer: {
  *     id: ObjectId | null,
+ *     name: string | null,               // plain name only — never has a degree appended,
+ *                                         // even when type is "doctor" (see `doctor` below)
+ *     type: string | null,               // e.g. "doctor", "agent", "institute"
+ *   },
+ *
+ *   // Independent of `referrer` — the doctor associated with this invoice.
+ *   // Always present (nulled out if none was selected), regardless of
+ *   // whether the frontend's "use doctor as referrer" toggle was on.
+ *   // When that toggle IS on, `referrer` above is populated from this same
+ *   // doctor's id/name (with type: "doctor") — but degree still only lives
+ *   // here, never merged into referrer.name.
+ *   doctor: {
+ *     id: ObjectId | null,
  *     name: string | null,
- *     type: string | null,               // e.g. "doctor", "agent", "clinic"
+ *     degree: string | null,
  *   },
  *
  *   tests: [{
@@ -173,6 +186,19 @@ const requiredDataSchema = {
   },
 };
 
+// Separate from required-data on purpose — the "Doctor" field on the invoice
+// form is independent of the referrers list (a referrer of type "doctor" is
+// a different record from a registered doctor in the doctors collection).
+// Includes commissionType/commissionValue so the frontend can drive the
+// referrer-discount math off the selected doctor when "use doctor as
+// referrer" is toggled on.
+const getInvoiceDoctorsSchema = {
+  schema: {
+    tags: ["Invoices"],
+    summary: "Fetch doctors for the Doctor field on invoice creation",
+  },
+};
+
 const addInvoiceSchema = {
   schema: {
     tags: ["Invoices"],
@@ -186,11 +212,22 @@ const addInvoiceSchema = {
         referrer: {
           type: "object",
           additionalProperties: false,
-          description: "Referring doctor or entity (optional)",
+          description: "Referring doctor or entity (optional). name is always plain — never a degree-suffixed string.",
           properties: {
             id: { type: ["string", "null"], minLength: 24, maxLength: 24, description: "ObjectId of the referrer" },
             name: { type: ["string", "null"], maxLength: 150, description: "Name of the referrer" },
             type: { type: ["string", "null"], maxLength: 50, description: "Type of referrer e.g. doctor, clinic" },
+          },
+        },
+        doctor: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "Doctor associated with this invoice, independent of the referrer (optional). Present even when the same doctor was also used as the referrer.",
+          properties: {
+            id: { type: ["string", "null"], minLength: 24, maxLength: 24, description: "ObjectId of the doctor" },
+            name: { type: ["string", "null"], maxLength: 150, description: "Name of the doctor" },
+            degree: { type: ["string", "null"], maxLength: 200, description: "Degree of the doctor" },
           },
         },
         tests: {
@@ -439,12 +476,33 @@ async function invoiceRoutes(fastify) {
     }
   });
 
+  // ── GET /invoice/doctors ──────────────────────────────────────────────────
+  // Powers the "Doctor" field on the invoice form — distinct from the
+  // referrers list above. Same "createInvoice" gate, not "manageDoctors",
+  // since any staff creating an invoice needs to be able to search doctors
+  // here regardless of whether they can manage the doctors roster itself.
+  fastify.get("/invoice/doctors", { ...getInvoiceDoctorsSchema, ...requireCreate }, async (req, reply) => {
+    try {
+      const doctors = await fastify.mongo.db
+        .collection("doctors")
+        .find({ labId: labId(req) }, { projection: { name: 1, degree: 1, commissionType: 1, commissionValue: 1 } })
+        .sort({ name: 1 })
+        .toArray();
+
+      return reply.send({ doctors });
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(500).send({ error: "Failed to fetch doctors" });
+    }
+  });
+
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
       const {
         patient,
         referrer,
+        doctor,
         tests,
         products = [],
         amount,
@@ -580,6 +638,13 @@ async function invoiceRoutes(fastify) {
               type: referrer.type ?? null,
             }
           : { id: null, name: null, type: null },
+        doctor: doctor
+          ? {
+              id: doctor.id ? toObjectId(doctor.id) : null,
+              name: doctor.name ?? null,
+              degree: doctor.degree ?? null,
+            }
+          : { id: null, name: null, degree: null },
         tests: tests.map((t) => ({
           testId: toObjectId(t.testId),
           name: t.name,
@@ -883,6 +948,8 @@ async function invoiceRoutes(fastify) {
             "patient.contactNumber": 1,
             "referrer.name": 1,
             "referrer.type": 1,
+            "doctor.name": 1,
+            "doctor.degree": 1,
             "tests.name": 1,
             "tests.price": 1,
             "products.name": 1,
