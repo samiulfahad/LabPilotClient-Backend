@@ -508,6 +508,7 @@ async function invoiceRoutes(fastify) {
   // ── POST /invoice/add ─────────────────────────────────────────────────────
   fastify.post("/invoice/add", { ...addInvoiceSchema, ...requireCreate }, async (req, reply) => {
     try {
+      console.log(req.body.doctor);
       const {
         patient,
         referrer,
