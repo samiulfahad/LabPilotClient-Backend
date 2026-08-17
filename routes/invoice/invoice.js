@@ -14,9 +14,9 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *
  *   patient: {
  *     name: string,
- *     gender: "male" | "female",
+ *     gender: "male" | "female" | "other",
  *     age: number,
- *     contactNumber: string,
+ *     contactNumber: string,              // optional — may be an empty string
  *   },
  *
  *   referrer: {
@@ -32,6 +32,9 @@ import generateInvoiceId from "../../utils/generateInvoiceId.js";
  *   // When that toggle IS on, `referrer` above is populated from this same
  *   // doctor's id/name (with type: "doctor") — but degree still only lives
  *   // here, never merged into referrer.name.
+ *   // If the doctor was typed in but not selected from the registered list
+ *   // (unregistered/unmatched doctor), only `name` is populated — id and
+ *   // degree stay null.
  *   doctor: {
  *     id: ObjectId | null,
  *     name: string | null,
@@ -142,14 +145,20 @@ const PAYMENT_MODES = ["cash", "bkash", "nagad", "card", "bank_transfer", "other
 
 const patientBodySchema = {
   type: "object",
-  required: ["name", "gender", "age", "contactNumber"],
+  required: ["name", "gender", "age"],
   additionalProperties: false,
   description: "Patient details",
   properties: {
     name: { type: "string", minLength: 1, maxLength: 100, description: "Full name of the patient" },
-    gender: { type: "string", enum: ["male", "female"], description: "Gender of the patient" },
+    gender: { type: "string", enum: ["male", "female", "other"], description: "Gender of the patient" },
     age: { type: "integer", minimum: 0, maximum: 150, description: "Age of the patient in years" },
-    contactNumber: { type: "string", minLength: 1, maxLength: 15, description: "Contact number of the patient" },
+    contactNumber: {
+      type: "string",
+      minLength: 0,
+      maxLength: 15,
+      default: "",
+      description: "Contact number of the patient (optional)",
+    },
   },
 };
 
@@ -223,7 +232,7 @@ const addInvoiceSchema = {
           type: "object",
           additionalProperties: false,
           description:
-            "Doctor associated with this invoice, independent of the referrer (optional). Present even when the same doctor was also used as the referrer.",
+            "Doctor associated with this invoice, independent of the referrer (optional). Present even when the same doctor was also used as the referrer. When the doctor wasn't picked from the registered list, only name is populated — id and degree are null.",
           properties: {
             id: { type: ["string", "null"], minLength: 24, maxLength: 24, description: "ObjectId of the doctor" },
             name: { type: ["string", "null"], maxLength: 150, description: "Name of the doctor" },
@@ -629,7 +638,9 @@ async function invoiceRoutes(fastify) {
           name: patient.name,
           gender: patient.gender,
           age: patient.age,
-          contactNumber: patient.contactNumber,
+          // Optional — stored as an empty string when the staff didn't
+          // collect a contact number for this patient.
+          contactNumber: patient.contactNumber ?? "",
         },
         referrer: referrer
           ? {
@@ -995,7 +1006,7 @@ async function invoiceRoutes(fastify) {
           name: patient.name.trim(),
           gender: patient.gender,
           age: patient.age,
-          contactNumber: patient.contactNumber.trim(),
+          contactNumber: (patient.contactNumber ?? "").trim(),
         },
         updated: {
           at: Date.now(),
