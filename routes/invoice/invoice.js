@@ -951,7 +951,6 @@ async function invoiceRoutes(fastify) {
         { invoiceId: req.params.invoiceId, labId: labId(req) },
         {
           projection: {
-            _id: 0,
             invoiceId: 1,
             createdAt: 1,
             "patient.name": 1,
@@ -983,7 +982,7 @@ async function invoiceRoutes(fastify) {
       // way POST /invoice/add returns it at creation time. Reconstruct it
       // here so PrintInvoice.jsx's normaliseInvoice() has reportLink/link
       // to fall back on when it fetches by ID directly (not via router state).
-      return reply.send({ ...invoice, link: `https://labpilotpro.com/${invoice.invoiceId}` });
+      return reply.send({ ...invoice, link: `https://scan.labpilotpro.com/${labId}/${invoice._id}/${invoice.invoiceId}/${invoice.contactNumber}` });
     } catch (err) {
       req.log.error(err);
       return reply.code(500).send({ error: "Failed to fetch invoice" });
