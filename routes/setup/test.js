@@ -68,7 +68,7 @@ const getCatalogSchema = {
 const getTestSchemaByTestIdSchema = {
   schema: {
     tags: ["Tests"],
-    summary: "Get active report schemas for a test",
+    summary: "Get report schemas for a test",
     params: testIdParamSchema,
   },
 };
@@ -259,12 +259,15 @@ async function testRoutes(fastify) {
   });
 
   // ── GET /test/schema/:testId ──────────────────────────────────────────────
+  // NOTE: no longer filters on isActive — testSchemas docs don't reliably
+  // carry that field, so filtering on it was hiding all formats. Returns
+  // every schema for the test.
   fastify.get("/test/schema/:testId", getTestSchemaByTestIdSchema, async (req, reply) => {
     try {
       const testId = toObjectId(req.params.testId);
       if (!testId) return reply.code(400).send({ error: "Invalid test ID" });
 
-      const list = await fastify.mongo.db.collection("testSchemas").find({ testId, isActive: true }).toArray();
+      const list = await fastify.mongo.db.collection("testSchemas").find({ testId }).toArray();
       return reply.send(list);
     } catch (err) {
       req.log.error(err);
