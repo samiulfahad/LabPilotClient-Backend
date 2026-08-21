@@ -629,7 +629,7 @@ async function invoiceRoutes(fastify) {
       const referrerCommissionTestWise = round2(tests.reduce((sum, t) => sum + (t.commission || 0), 0));
 
       // ── Insert invoice ──────────────────────────────────────────────────
-      await col().insertOne({
+     const invoiceCreationResult = await col().insertOne({
         labId: labId(req),
         labKey: String(req.user.labKey),
         invoiceId,
@@ -737,7 +737,7 @@ async function invoiceRoutes(fastify) {
 
       return reply.code(201).send({
         invoiceId,
-        link: `https://labpilotpro.com/${invoiceId}`,
+        link: `https://scan.labpilotpro.com/${req.user.labId}/${invoiceCreationResult.insertedId}/`,
       });
     } catch (err) {
       req.log.error(err);
