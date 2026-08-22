@@ -28,6 +28,10 @@ import productRoutes from "./routes/setup/product.js";
 import doctorRoutes from "./routes/setup/doctor.js";
 import admissionSpaceRoutes from "./routes/setup/admissionSpace.js";
 
+// Support Route
+import supportRoutes from "./routes/support/support.js";
+
+
 // Invoice / Outdoor Routes
 import invoiceRoutes from "./routes/invoice/invoice.js";
 
@@ -177,6 +181,9 @@ fastify.register(doctorRoutes, { prefix: API });
 fastify.register(indoorPatientRoutes, { prefix: API });
 fastify.register(admissionSpaceRoutes, { prefix: API });
 fastify.register(staticDataRoutes, { prefix: API });
+
+// Support Route 
+fastify.register(supportRoutes, { prefix: API });
 
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
