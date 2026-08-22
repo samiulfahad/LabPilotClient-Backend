@@ -10,10 +10,11 @@ const sendMessageSchema = {
     summary: "Send a support message / complaint",
     body: {
       type: "object",
-      required: ["message"],
+      required: ["message", "contact"],
       additionalProperties: false,
       properties: {
         message: { type: "string", minLength: 1, maxLength: 2000 },
+        contact: { type: "string", pattern: "^\\d{11}$", description: "11-digit contact number" },
       },
     },
   },
@@ -25,7 +26,7 @@ async function supportRoutes(fastify) {
 
   // ── POST /support ────────────────────────────────────────────────────────
   fastify.post("/support", { onRequest: [fastify.authenticate], ...sendMessageSchema }, async (req, reply) => {
-    const { message } = req.body || {};
+    const { message, contact } = req.body || {};
 
     // Only need the name here — everything else on the lab doc is unused by
     // this route, so keep the query narrow.
@@ -37,6 +38,7 @@ async function supportRoutes(fastify) {
       labName: lab?.name ?? null,
       staffId: toObjectId(req.user.id),
       staffName: req.user.name,
+      contact,
       message: message.trim(),
       status: "unread",
       createdAt: new Date(),
