@@ -20,7 +20,7 @@ const sendMessageSchema = {
   },
 };
 
-async function supportRoutes(fastify) {
+async function helpCenterRoutes(fastify) {
   const supportMessagesCollection = () => fastify.mongo.db.collection("supportMessages");
   const labsCollection = () => fastify.mongo.db.collection("labs");
 
@@ -61,4 +61,4 @@ async function supportRoutes(fastify) {
   });
 }
 
-export default supportRoutes;
+export default helpCenterRoutes;

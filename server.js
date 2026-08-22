@@ -28,8 +28,8 @@ import productRoutes from "./routes/setup/product.js";
 import doctorRoutes from "./routes/setup/doctor.js";
 import admissionSpaceRoutes from "./routes/setup/admissionSpace.js";
 
-// Support Route
-import supportRoutes from "./routes/support/support.js";
+// Help Center Route
+import helpCenterRoutes from "./routes/helpCenter/helpCenter.js";
 
 
 // Invoice / Outdoor Routes
@@ -90,10 +90,8 @@ await fastify.register(cors, {
   origin: [
     "https://labpilotpro.com",
     "https://www.labpilotpro.com",
-    "https://lpadmin.netlify.app",
     "http://localhost:5173",
     "http://localhost:5174",
-    "http://10.155.23.187:5173",
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -183,7 +181,7 @@ fastify.register(admissionSpaceRoutes, { prefix: API });
 fastify.register(staticDataRoutes, { prefix: API });
 
 // Support Route 
-fastify.register(supportRoutes, { prefix: API });
+fastify.register(helpCenterRoutes, { prefix: API });
 
 fastify.register(internalRoutes); // no /v1 prefix — internal only
 
